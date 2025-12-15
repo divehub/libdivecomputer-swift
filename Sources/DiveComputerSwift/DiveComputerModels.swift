@@ -31,16 +31,18 @@ public struct DiveComputerInfo: Sendable, Hashable {
 public struct GasMix: Sendable, Hashable {
     public var oxygenFraction: Double
     public var heliumFraction: Double
+    public var isDiluent: Bool
 
-    public init(oxygenFraction: Double, heliumFraction: Double = 0) {
+    public init(oxygenFraction: Double, heliumFraction: Double = 0, isDiluent: Bool = false) {
         self.oxygenFraction = oxygenFraction
         self.heliumFraction = heliumFraction
+        self.isDiluent = isDiluent
     }
 }
 
 public enum DiveEvent: Sendable, Hashable {
-    case gasChange(GasMix) // Usually OC gas switch
-    case diluentChange(GasMix) // CCR Diluent switch
+    case gasChange(GasMix)  // Usually OC gas switch
+    case diluentChange(GasMix)  // CCR Diluent switch
     case warning(String)
     case error(String)
     case unknown(code: Int)
@@ -62,7 +64,7 @@ public struct DiveTank: Sendable, Hashable {
     public var endPressureBar: Double?
     public var gasMix: GasMix?
     public var usage: TankUsage
-    
+
     public init(
         name: String? = nil,
         serialNumber: String? = nil,
@@ -161,14 +163,16 @@ public struct DiveLog: Sendable, Hashable, Identifiable {
     public var surfacePressure: Double?
     public var samples: [DiveSample]
     public var gasMixes: [GasMix]
-    public var notes: String?
-    public var fingerprint: Data?
+    public var fingerprint: String?
     public var tanks: [DiveTank]
     public var decoModel: String?
     public var gradientFactorLow: Int?
     public var gradientFactorHigh: Int?
     public var diveMode: DiveMode?
     public var waterDensity: Double?
+    public var timeZoneOffset: TimeInterval?
+
+    public var rawData: Data?
 
     public init(
         id: UUID = UUID(),
@@ -186,8 +190,9 @@ public struct DiveLog: Sendable, Hashable, Identifiable {
         gradientFactorHigh: Int? = nil,
         diveMode: DiveMode? = nil,
         waterDensity: Double? = nil,
-        notes: String? = nil,
-        fingerprint: Data? = nil
+        timeZoneOffset: TimeInterval? = nil,
+        fingerprint: String? = nil,
+        rawData: Data? = nil
     ) {
         self.id = id
         self.startTime = startTime
@@ -204,7 +209,8 @@ public struct DiveLog: Sendable, Hashable, Identifiable {
         self.gradientFactorHigh = gradientFactorHigh
         self.diveMode = diveMode
         self.waterDensity = waterDensity
-        self.notes = notes
+        self.timeZoneOffset = timeZoneOffset
         self.fingerprint = fingerprint
+        self.rawData = rawData
     }
 }

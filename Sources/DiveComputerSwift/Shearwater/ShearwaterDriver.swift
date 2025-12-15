@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Default BLE UUIDs used by Shearwater for their proprietary serial service.
 /// These are widely used across Perdix/Petrel/Teric/Nerd/Peregrine generations.
@@ -31,19 +32,20 @@ public final class ShearwaterDriver: DiveComputerDriver {
 
     @MainActor
     public func open(link: BluetoothLink) async throws -> any DiveComputerDriverSession {
-        print("🔧 ShearwaterDriver: Finding characteristics dynamically...")
+        Logger.shearwater.info("🔧 ShearwaterDriver: Finding characteristics dynamically...")
 
         // First, list all discovered characteristics
         let allChars = try await link.getDiscoveredCharacteristics(for: ShearwaterBLE.service)
-        print("🔧 ShearwaterDriver: Total characteristics discovered: \(allChars.count)")
+        Logger.shearwater.info(
+            "🔧 ShearwaterDriver: Total characteristics discovered: \(allChars.count)")
         for char in allChars {
-            print("  - \(char.characteristic)")
+            Logger.shearwater.info("  - \(char.characteristic)")
         }
 
         // Get write characteristic (has .write or .writeWithoutResponse property)
         guard let writeChar = try await link.getWriteCharacteristic(for: ShearwaterBLE.service)
         else {
-            print("❌ ShearwaterDriver: No write characteristic found")
+            Logger.shearwater.error("❌ ShearwaterDriver: No write characteristic found")
             throw BluetoothTransportError.missingCharacteristic(
                 BluetoothCharacteristic(
                     service: ShearwaterBLE.service, characteristic: BluetoothUUID("unknown"))
@@ -53,26 +55,26 @@ public final class ShearwaterDriver: DiveComputerDriver {
         // Get notify characteristic (has .notify or .indicate property)
         guard let notifyChar = try await link.getNotifyCharacteristic(for: ShearwaterBLE.service)
         else {
-            print("❌ ShearwaterDriver: No notify characteristic found")
+            Logger.shearwater.error("❌ ShearwaterDriver: No notify characteristic found")
             throw BluetoothTransportError.missingCharacteristic(
                 BluetoothCharacteristic(
                     service: ShearwaterBLE.service, characteristic: BluetoothUUID("unknown"))
             )
         }
 
-        print("✅ ShearwaterDriver: Write char: \(writeChar.characteristic)")
-        print("✅ ShearwaterDriver: Notify char: \(notifyChar.characteristic)")
+        Logger.shearwater.info("✅ ShearwaterDriver: Write char: \(writeChar.characteristic)")
+        Logger.shearwater.info("✅ ShearwaterDriver: Notify char: \(notifyChar.characteristic)")
 
         // Determine the appropriate write type for this characteristic
         let writeType = try await link.getWriteType(for: writeChar)
-        print(
+        Logger.shearwater.info(
             "✅ ShearwaterDriver: Write type: \(writeType == .withResponse ? "withResponse" : "withoutResponse")"
         )
 
         // Enable notifications before starting communication
-        print("🔧 ShearwaterDriver: Enabling notifications...")
+        Logger.shearwater.info("🔧 ShearwaterDriver: Enabling notifications...")
         try await link.enableNotifications(for: notifyChar)
-        print("✅ ShearwaterDriver: Notifications enabled, ready to communicate")
+        Logger.shearwater.info("✅ ShearwaterDriver: Notifications enabled, ready to communicate")
 
         let transport = ShearwaterTransport(
             link: link,
@@ -124,25 +126,11 @@ public final class ShearwaterSession: @unchecked Sendable, DiveComputerDriverSes
         )
     }
 
+    private var logBaseAddress: UInt32?
 
+    private func ensureBaseAddress() async throws -> UInt32 {
+        if let addr = logBaseAddress { return addr }
 
-    private struct DiveCandidate {
-        let index: Int
-        let address: UInt32
-        let fingerprint: Data
-    }
-
-    // Protocol Conformance
-    public func downloadDiveLogs(progress: DiveDownloadProgress?) async throws -> [DiveLog] {
-        try await downloadDiveLogs(fingerprint: nil, progress: progress, onRawData: nil)
-    }
-
-    public func downloadDiveLogs(
-        fingerprint: Data? = nil,
-        progress: DiveDownloadProgress?,
-        onRawData: ((Int, Data) -> Void)? = nil
-    ) async throws -> [DiveLog] {
-        // 1. Read Log Parameters
         let logUpload = try await transport.readDBI(id: 0x8021, expected: 9)
         var baseAddr = logUpload[1...4].reduce(0) { ($0 << 8) | UInt32($1) }
         switch baseAddr {
@@ -153,123 +141,149 @@ public final class ShearwaterSession: @unchecked Sendable, DiveComputerDriverSes
         default:
             break
         }
-        
-        // 2. Download and Parse Manifest (List First)
-        let candidates = try await downloadManifest()
-        
-        // 3. Log Candidates
-        print("📋 Manifest parsed. Found \(candidates.count) dives:")
-        for candidate in candidates {
-            print("   Dive #\(candidate.index): Addr=0x\(String(format: "%0X", candidate.address)) Fingerprint=\(candidate.fingerprint.map { String(format: "%02X", $0) }.joined())")
-        }
-        
-        // 4. Download Dives
-        return try await downloadDives(
-            candidates: candidates,
-            baseAddr: baseAddr,
-            syncFingerprint: fingerprint,
-            progress: progress,
-            onRawData: onRawData
-        )
+        self.logBaseAddress = baseAddr
+        return baseAddr
     }
-    
-    private func downloadManifest() async throws -> [DiveCandidate] {
+
+    // Protocol Conformance
+
+    public func downloadManifest() async throws -> [DiveLogCandidate] {
+        _ = try await ensureBaseAddress()
+
+        // Shearwater Manifest Logic
         let manifestAddr: UInt32 = 0xE000_0000
         let manifestSize = 0x600
         let recordSize = 0x20
-        
-        print("📋 Downloading manifest...")
+
+        Logger.shearwater.info("📋 Downloading manifest...")
         let manifestData = try await transport.download(
             address: manifestAddr,
             size: manifestSize,
             compressed: false
         ) { _, _ in }
-        
-        var candidates: [DiveCandidate] = []
+
+        var candidates: [DiveLogCandidate] = []  // Newest to Oldest (Standard Shearwater behavior is Ring Buffer, usually newest at current pointer? No, we scan strictly by index in ring buffer)
+
+        // The manifest is a ring buffer. We need to find the head/tail or just return valid entries.
+        // The previous logic scanned simply from offset 0.
+        // "Shearwater stores the manifest as a ring buffer of 32-byte entries."
+        // We will scan all valid entries and return them.
+        // User Requirement: "Ordered from NEW to OLD"
+
+        // Original logic:
+        var rawCandidates: [(index: Int, address: UInt32, fingerprint: String)] = []
         var offset = 0
         var sortedIndex = 1
-        
+
         while offset + recordSize <= manifestData.count {
             let header = UInt16(
                 bigEndian: manifestData.withUnsafeBytes { ptr in
                     ptr.load(fromByteOffset: offset, as: UInt16.self)
                 })
-            
+
             if header == 0x5A23 {
                 offset += recordSize
                 continue  // deleted dive
             }
             guard header == 0xA5C4 else { break }
-            
+
             let fingerData = manifestData[offset + 4..<offset + 8]
+            let fingerprintHex = fingerData.map { String(format: "%02X", $0) }.joined()
             let address = manifestData[offset + 20..<offset + 24].reduce(0) {
                 ($0 << 8) | UInt32($1)
             }
-            
-            candidates.append(DiveCandidate(index: sortedIndex, address: address, fingerprint: Data(fingerData)))
+
+            rawCandidates.append(
+                (index: sortedIndex, address: address, fingerprint: fingerprintHex))
             sortedIndex += 1
             offset += recordSize
         }
-        
+
+        // Shearwater's manifest order in memory is usually oldest to newest?
+        // Wait, the previous implementation did `candidatesToDownload.reverse() // Download oldest first`
+        // which implies `rawCandidates` were in NEWEST order? Or OLDEST?
+        // If we assumed incremental sync stops at a match, and we iterate 0..N:
+        // If 0 is newest, we check 0 (new), 1 (older)... match (synced). Stop.
+        // Then reverse to download: match+1 (oldest unsynced) ... 0 (newest).
+        // So memory order is likely NEWEST to OLDEST.
+        // We will return them as found (NEWEST to OLDEST).
+
+        for raw in rawCandidates {
+            let candidate = DiveLogCandidate(
+                id: raw.index,
+                timestamp: nil,  // Manifest doesn't strictly have timestamp easily parseable without full parse, or maybe it does? ignoring for now.
+                fingerprint: raw.fingerprint,
+                metadata: ["address": String(raw.address)]
+            )
+            candidates.append(candidate)
+        }
+
         return candidates
     }
 
-    private func downloadDives(
-        candidates: [DiveCandidate],
-        baseAddr: UInt32,
-        syncFingerprint: Data?,
-        progress: DiveDownloadProgress?,
-        onRawData: ((Int, Data) -> Void)?
+    public func downloadDives(
+        candidates: [DiveLogCandidate],
+        progress: DiveDownloadProgress?
     ) async throws -> [DiveLog] {
+        let baseAddr = try await ensureBaseAddress()
         let maxDiveSize = 0xFFFFFF
         var dives: [DiveLog] = []
-        
-        // Progress: We report "steps" instead of bytes effectively, 
-        // or we could use a fixed large number. 
-        // User requested "don't estimate", but we need *some* progress reporting.
-        // We will report progress per dive.
-        let totalDives = candidates.count
-        var currentDiveIndex = 0
-        
-        // If we have a sync fingerprint, we can skip older dives.
-        // Assuming candidates are ordered new->old or old->new?
-        // Shearwater manifest order is strictly sequential in memory.
-        
-        for candidate in candidates {
-            // Check sync fingerprint
-            if let target = syncFingerprint, candidate.fingerprint == target {
-                print("✨ Reached previously synced dive (Fingerprint match). Stopping.")
-                break
-            }
-            
-            print("⬇️ Downloading Dive #\(candidate.index) (Addr=0x\(String(format: "%0X", candidate.address)))...")
-            
-            // Short pause between dives to let device settle
-            try await Task.sleep(nanoseconds: 200_000_000) // 200ms
 
-            // We pass a dummy progress closure to 'download' because we handle
-            // aggregate progress here at the dive level.
+        var currentLogIndex = 0
+        let totalLogs = candidates.count
+
+        for candidate in candidates {
+            guard let addrStr = candidate.metadata["address"], let address = UInt32(addrStr) else {
+                Logger.shearwater.error(
+                    "❌ Missing address in metadata for candidate \(candidate.id)")
+                continue
+            }
+
+            Logger.shearwater.info(
+                "⬇️ Downloading Dive #\(candidate.id) (Addr=0x\(String(format: "%0X", address)))..."
+            )
+
+            // Short pause between dives to let device settle
+            try await Task.sleep(nanoseconds: 200_000_000)  // 200ms
+
             let diveData = try await transport.download(
-                address: baseAddr + candidate.address,
+                address: baseAddr + address,
                 size: maxDiveSize,
                 compressed: true
             ) { bytesDone, bytesTotal in
-                 // Optional: Could forward detailed byte progress here if needed
+                progress?(
+                    DeviceTransferProgress(
+                        currentLogIndex: currentLogIndex + 1,
+                        totalLogs: totalLogs,
+                        currentLogBytes: bytesDone
+                    ))
             }
 
-            // Report raw data if requested
-            onRawData?(candidate.index, diveData)
-            
             if let parsed = ShearwaterLogParser.parse(data: diveData) {
+                // Adjust startTime if timezone offset is present to store as True UTC
+                // parsed.startTime is "Clock Time as UTC".
+                // True UTC = Clock Time - Offset
+                var finalStartTime = parsed.startTime
+                if let offset = parsed.timeZoneOffset {
+                    finalStartTime = parsed.startTime.addingTimeInterval(-offset)
+                }
+
                 let log = DiveLog(
-                    startTime: parsed.startTime,
+                    startTime: finalStartTime,
                     duration: parsed.duration,
                     maxDepthMeters: parsed.maxDepth,
                     averageDepthMeters: parsed.avgDepth,
                     samples: parsed.samples,
                     gasMixes: parsed.gasMixes,
-                    notes: parsed.notes,
-                    fingerprint: parsed.fingerprint ?? candidate.fingerprint
+                    tanks: parsed.tanks,
+                    decoModel: parsed.decoModel,
+                    gradientFactorLow: parsed.gradientFactorLow,
+                    gradientFactorHigh: parsed.gradientFactorHigh,
+                    diveMode: parsed.diveMode,
+                    waterDensity: parsed.waterDensity,
+                    timeZoneOffset: parsed.timeZoneOffset,
+                    fingerprint: candidate.fingerprint,
+                    rawData: diveData
                 )
                 dives.append(log)
             } else {
@@ -278,20 +292,22 @@ public final class ShearwaterSession: @unchecked Sendable, DiveComputerDriverSes
                     duration: .seconds(0),
                     maxDepthMeters: 0,
                     samples: [],
-                    notes: "Failed to parse dive #\(candidate.index)",
-                    fingerprint: candidate.fingerprint
+                    gasMixes: [],
+                    fingerprint: candidate.fingerprint,
+                    rawData: diveData
                 )
                 dives.append(log)
             }
-            
-            currentDiveIndex += 1
-            // Use a large constant for 'total' to represent 100% per dive if we wanted,
-            // or just report dive count progress.
-            // Let's report current byte count roughly or just dive count?
-            // The closure expects (completed, total).
-            progress?(currentDiveIndex, totalDives)
+
+            currentLogIndex += 1
+            progress?(
+                DeviceTransferProgress(
+                    currentLogIndex: currentLogIndex,
+                    totalLogs: totalLogs,
+                    currentLogBytes: diveData.count
+                ))
         }
-        
+
         return dives
     }
 
@@ -303,9 +319,9 @@ public final class ShearwaterSession: @unchecked Sendable, DiveComputerDriverSes
     public func close() async {
         // Send End Session command (Shearwater Common Close logic)
         // 0x2E 0x90 0x20 0x00
-        print("🔌 ShearwaterSession: Sending End Session command...")
+        Logger.shearwater.info("🔌 ShearwaterSession: Sending End Session command...")
         _ = try? await transport.transfer(request: Data([0x2E, 0x90, 0x20, 0x00]), expected: 0)
-        
+
         // No special shutdown needed; caller will close BluetoothLink.
         await transport.shutdown()
     }
@@ -320,7 +336,7 @@ final class ShearwaterTransport: @unchecked Sendable {
     private var receivedData: Data = Data()
     private let dataQueue = DispatchQueue(label: "com.shearwater.dataqueue")
     private var notificationTask: Task<Void, Never>?
-    
+
     // Continuation for waiting for data, replacing polling
     private var dataContinuation: CheckedContinuation<Void, Error>?
 
@@ -351,9 +367,11 @@ final class ShearwaterTransport: @unchecked Sendable {
                         continuation.resume()
                     }
                 }
-                print("📭 Notification stream ended normally after \(totalChunks) chunks")
+                Logger.shearwater.info(
+                    "📭 Notification stream ended normally after \(totalChunks) chunks")
             } catch {
-                print("📭 Notification stream error after \(totalChunks) chunks: \(error)")
+                Logger.shearwater.error(
+                    "📭 Notification stream error after \(totalChunks) chunks: \(error)")
                 // Fail any waiter
                 if let continuation = self.dataContinuation {
                     self.dataContinuation = nil
@@ -367,31 +385,31 @@ final class ShearwaterTransport: @unchecked Sendable {
     func waitForReady() async {
         // Give the notification consumer task time to start and set up the stream
         try? await Task.sleep(nanoseconds: 100_000_000)  // 100ms
-        print("✅ ShearwaterTransport: Ready")
+        Logger.shearwater.info("✅ ShearwaterTransport: Ready")
     }
-    
+
     func shutdown() async {
         notificationTask?.cancel()
-        dataContinuation?.resume(throwing: ShearwaterError.timeout) // or cancelled
+        dataContinuation?.resume(throwing: ShearwaterError.timeout)  // or cancelled
         dataContinuation = nil
     }
 
-    /// Set to true to enable verbose transfer logging
-    var verboseLogging = false
-
     func transfer(request: Data, expected: Int) async throws -> Data {
-        if verboseLogging {
-            print(
-                "📤 ShearwaterTransport: Sending request \(request.map { String(format: "%02x", $0) }.joined()) (\(request.count) bytes), expecting \(expected) bytes response"
-            )
+        // Check connection before starting transfer
+        guard link.isConnected else {
+            Logger.shearwater.error("❌ ShearwaterTransport: Device not connected")
+            throw BluetoothTransportError.disconnected(nil)
         }
+
+        Logger.shearwater.info(
+            "📤 ShearwaterTransport: Sending request \(request.map { String(format: "%02x", $0) }.joined()) (\(request.count) bytes), expecting \(expected) bytes response"
+        )
 
         // Clear buffer before sending
         dataQueue.sync {
             if !receivedData.isEmpty {
-                if verboseLogging {
-                    print("⚠️ ShearwaterTransport: Clearing \(receivedData.count) stale bytes")
-                }
+                Logger.shearwater.info(
+                    "⚠️ ShearwaterTransport: Clearing \(self.receivedData.count) stale bytes")
                 receivedData = Data()
             }
             // Clear any pending continuation to ensure we don't wake up on stale events
@@ -421,17 +439,25 @@ final class ShearwaterTransport: @unchecked Sendable {
         let timeout: TimeInterval = 5.0
 
         while true {
+            // Check if still connected
+            guard link.isConnected else {
+                Logger.shearwater.error("❌ Device disconnected during SLIP packet read")
+                throw BluetoothTransportError.disconnected(nil)
+            }
+
             if Date().timeIntervalSince(startTime) > timeout {
-                print("⏰ Timeout after \(chunkCount) chunks, output so far: \(output.count) bytes")
+                Logger.shearwater.info(
+                    "⏰ Timeout after \(chunkCount) chunks, output so far: \(output.count) bytes")
                 if output.count > 0 {
-                    let preview = output.prefix(32).map { String(format: "%02x", $0) }.joined(separator: " ")
-                    print("   Preview: \(preview)")
+                    let preview = output.prefix(32).map { String(format: "%02x", $0) }.joined(
+                        separator: " ")
+                    Logger.shearwater.info("   Preview: \(preview)")
                 }
                 throw ShearwaterError.timeout
             }
 
             var chunk: Data?
-            
+
             // Check for data
             var shouldWait = false
             dataQueue.sync {
@@ -442,7 +468,7 @@ final class ShearwaterTransport: @unchecked Sendable {
                     shouldWait = true
                 }
             }
-            
+
             if shouldWait {
                 // Wait for notification
                 try await withCheckedThrowingContinuation { continuation in
@@ -502,6 +528,12 @@ final class ShearwaterTransport: @unchecked Sendable {
     func download(
         address: UInt32, size: Int, compressed: Bool, progress: @escaping (Int, Int) -> Void
     ) async throws -> Data {
+        // Check connection before starting download
+        guard link.isConnected else {
+            Logger.shearwater.error("❌ ShearwaterTransport: Device not connected")
+            throw BluetoothTransportError.disconnected(nil)
+        }
+
         // Init request: 0x35 flags(0x10 if compressed) 0x34 address(4) size(3)
         var request = Data([0x35, compressed ? 0x10 : 0x00, 0x34])
         request.append(contentsOf: [
@@ -519,7 +551,7 @@ final class ShearwaterTransport: @unchecked Sendable {
         // If we get 0x7F (error/NAK), the device might be in a bad state from a previous
         // incomplete transfer. Send a quit command to reset, then retry the init.
         if initResp.count >= 1 && initResp[0] == 0x7F {
-            print("⚠️ Got NAK on init, sending quit to reset device state...")
+            Logger.shearwater.info("⚠️ Got NAK on init, sending quit to reset device state...")
             _ = try? await transfer(request: Data([0x37]), expected: 2)
             try await Task.sleep(nanoseconds: 100_000_000)  // 100ms delay
             initResp = try await transfer(request: request, expected: 3)
@@ -534,29 +566,37 @@ final class ShearwaterTransport: @unchecked Sendable {
 
         // Give the device a moment to prepare for block transmission
         // This is crucial for switching to compressed mode or just processing the init
-        try await Task.sleep(nanoseconds: 100_000_000) // 100ms
+        try await Task.sleep(nanoseconds: 100_000_000)  // 100ms
 
         var blockIndex: UInt8 = 1
         var totalReceived = 0
         var output = Data()
         let maxBlock = Int(initResp[2])
-        print("📦 Download started: maxBlock=\(maxBlock), size=\(size), initResp=\(initResp.map { String(format: "%02x", $0) }.joined())")
+        Logger.shearwater.info(
+            "📦 Download started: maxBlock=\(maxBlock), size=\(size), initResp=\(initResp.map { String(format: "%02x", $0) }.joined())"
+        )
 
         while totalReceived < size {
             // Check for cancellation
             try Task.checkCancellation()
+
+            // Check if still connected
+            guard link.isConnected else {
+                Logger.shearwater.error("❌ Device disconnected during block download")
+                throw BluetoothTransportError.disconnected(nil)
+            }
 
             let blockReq = Data([0x36, blockIndex])
             let blockResp: Data
             do {
                 blockResp = try await transfer(request: blockReq, expected: maxBlock + 2)
             } catch {
-                print("❌ Block \(blockIndex) transfer failed: \(error)")
+                Logger.shearwater.error("❌ Block \(blockIndex) transfer failed: \(error)")
                 throw error
             }
             guard blockResp.count >= 2, blockResp[0] == 0x76, blockResp[1] == blockIndex else {
                 let got = blockResp.count >= 2 ? blockResp[1] : 0
-                print(
+                Logger.shearwater.error(
                     "❌ Block response mismatch: expected 0x76 idx=\(blockIndex), got 0x\(String(format: "%02X", blockResp[0])) idx=\(got)"
                 )
                 throw ShearwaterError.unexpectedBlockResponse(
@@ -589,7 +629,7 @@ final class ShearwaterTransport: @unchecked Sendable {
         // but may return 0x7F (negative response) if session already ended
         let quitResp = try await transfer(request: Data([0x37]), expected: 2)
         if quitResp.count != 2 || quitResp[0] != 0x77 || quitResp[1] != 0x00 {
-            print(
+            Logger.shearwater.info(
                 "⚠️ Quit response unexpected: \(quitResp.map { String(format: "%02x", $0) }.joined())"
             )
             // Don't throw - we got the data, just the quit confirmation failed
@@ -598,7 +638,6 @@ final class ShearwaterTransport: @unchecked Sendable {
         return output
     }
 }
-
 
 private enum ShearwaterSlip {
     static let END: UInt8 = 0xC0

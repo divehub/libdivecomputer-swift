@@ -1,12 +1,41 @@
-import Foundation
+@preconcurrency import Foundation
+import os
 
 #if canImport(CoreBluetooth)
     import CoreBluetooth
+
+    extension Notification.Name {
+        static let bluetoothPeripheralDisconnected = Notification.Name(
+            "bluetoothPeripheralDisconnected")
+    }
 
     @MainActor
     public final class CoreBluetoothTransport: NSObject, BluetoothTransport {
         private var central: CBCentralManager!
         private var scanContinuation: AsyncThrowingStream<BluetoothDiscovery, Error>.Continuation?
+        private var stateCallbacks: [(BluetoothState) -> Void] = []
+
+        public var bluetoothState: AsyncStream<BluetoothState> {
+            AsyncStream { continuation in
+                // Yield current state immediately
+                let currentState = self.mapState(self.central.state)
+                continuation.yield(currentState)
+
+                // Store callback to yield future updates
+                // let uuid = UUID()
+                self.stateCallbacks.append { state in
+                    continuation.yield(state)
+                }
+
+                // Note: Simple callback array approach.
+                // In a more robust impl, we might want a way to remove specific callbacks on termination,
+                // but AsyncStream doesn't provide an easy onTermination hook for the producer side explicitly
+                // without managing continuations manually.
+                // For now, this is acceptable for the app's lifecycle or we can use a multicast approach if needed.
+                // However, capturing continuation in a closure added to an array is the simplest way to broadcast.
+            }
+        }
+
         private var scanDescriptors: [DiveComputerDescriptor] = []
         private var discoveredPeripherals: [UUID: CBPeripheral] = [:]
         private var peripheralDescriptors: [UUID: DiveComputerDescriptor] = [:]
@@ -38,8 +67,9 @@ import Foundation
                     let services = Array(Set(descriptors.flatMap { $0.serviceUUIDs })).map {
                         $0.cbUUID
                     }
-                    print("🔍 Starting BLE scan for services: \(services.map { $0.uuidString })")
-                    print("🔍 Scanning for \(descriptors.count) descriptor(s)")
+                    Logger.bluetooth.info(
+                        "🔍 Starting BLE scan for services: \(services.map { $0.uuidString })")
+                    Logger.bluetooth.info("🔍 Scanning for \(descriptors.count) descriptor(s)")
                     central.scanForPeripherals(
                         withServices: services.isEmpty ? nil : services,
                         options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
@@ -63,24 +93,25 @@ import Foundation
         }
 
         public func connect(_ discovery: BluetoothDiscovery) async throws -> BluetoothLink {
-            print("🔌 CoreBluetoothTransport: Connecting to \(discovery.id)")
+            Logger.bluetooth.info("🔌 CoreBluetoothTransport: Connecting to \(discovery.id)")
             try await waitUntilReady()
             let peripheral: CBPeripheral?
             if let cached = discoveredPeripherals[discovery.id] {
-                print("🔌 CoreBluetoothTransport: Using cached peripheral")
+                Logger.bluetooth.info("🔌 CoreBluetoothTransport: Using cached peripheral")
                 peripheral = cached
             } else {
-                print("🔌 CoreBluetoothTransport: Retrieving peripheral by identifier")
+                Logger.bluetooth.info(
+                    "🔌 CoreBluetoothTransport: Retrieving peripheral by identifier")
                 peripheral = central.retrievePeripherals(withIdentifiers: [discovery.id]).first
             }
 
             guard let target = peripheral else {
-                print("❌ CoreBluetoothTransport: Peripheral not found")
+                Logger.bluetooth.error("❌ CoreBluetoothTransport: Peripheral not found")
                 throw BluetoothTransportError.peripheralUnavailable
             }
 
             peripheralDescriptors[target.identifier] = discovery.descriptor
-            print(
+            Logger.bluetooth.info(
                 "🔌 CoreBluetoothTransport: Initiating connection to \(target.name ?? "unnamed")...")
 
             return try await withCheckedThrowingContinuation { continuation in
@@ -115,8 +146,16 @@ import Foundation
 
     extension CoreBluetoothTransport: @MainActor CBCentralManagerDelegate {
         public func centralManagerDidUpdateState(_ central: CBCentralManager) {
-            print(
-                "📶 Bluetooth state: \(central.state.rawValue) - \(stateDescription(central.state))")
+            let newState = mapState(central.state)
+            Logger.bluetooth.info(
+                "📶 Bluetooth state: \(central.state.rawValue) - \(newState)"
+            )
+
+            // Broadcast to all streams
+            for callback in stateCallbacks {
+                callback(newState)
+            }
+
             guard let continuation = readinessContinuation else { return }
 
             switch central.state {
@@ -129,10 +168,26 @@ import Foundation
             case .poweredOff:
                 continuation.resume(throwing: BluetoothTransportError.poweredOff)
             default:
+                // For other states (unknown, resetting), we wait.
+                // BUT for the stream, we already yielded.
+                // For connection readiness, we probably still want to wait or fail?
+                // Existing logic sends unsupported for default, which is fine for connection readiness.
                 continuation.resume(throwing: BluetoothTransportError.unsupported)
             }
 
             readinessContinuation = nil
+        }
+
+        private func mapState(_ state: CBManagerState) -> BluetoothState {
+            switch state {
+            case .unknown: return .unknown
+            case .resetting: return .resetting
+            case .unsupported: return .unsupported
+            case .unauthorized: return .unauthorized
+            case .poweredOff: return .poweredOff
+            case .poweredOn: return .poweredOn
+            @unknown default: return .unknown
+            }
         }
 
         public func centralManager(
@@ -141,12 +196,12 @@ import Foundation
             advertisementData: [String: Any],
             rssi RSSI: NSNumber
         ) {
-            print(
+            Logger.bluetooth.info(
                 "📱 Discovered peripheral: \(peripheral.name ?? "Unknown") (\(peripheral.identifier))"
             )
-            print("📱 Advertisement data: \(advertisementData)")
+            Logger.bluetooth.info("📱 Advertisement data: \(advertisementData)")
             guard let descriptor = matchDescriptor(for: advertisementData) else {
-                print("⚠️ No matching descriptor for this peripheral")
+                Logger.bluetooth.warning("⚠️ No matching descriptor for this peripheral")
                 return
             }
             discoveredPeripherals[peripheral.identifier] = peripheral
@@ -168,13 +223,14 @@ import Foundation
 
         public func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral)
         {
-            print(
+            Logger.bluetooth.info(
                 "✅ CoreBluetoothTransport: Connected to \(peripheral.name ?? "unnamed") (\(peripheral.identifier))"
             )
             guard let descriptor = peripheralDescriptors[peripheral.identifier],
                 let continuation = connectContinuations.removeValue(forKey: peripheral.identifier)
             else {
-                print("⚠️ CoreBluetoothTransport: No continuation found for peripheral")
+                Logger.bluetooth.info(
+                    "⚠️ CoreBluetoothTransport: No continuation found for peripheral")
                 return
             }
 
@@ -183,10 +239,12 @@ import Foundation
             Task { @MainActor in
                 do {
                     try await link.prepare()
-                    print("✅ CoreBluetoothTransport: Link prepared, resuming continuation")
+                    Logger.bluetooth.info(
+                        "✅ CoreBluetoothTransport: Link prepared, resuming continuation")
                     continuation.resume(returning: link)
                 } catch {
-                    print("❌ CoreBluetoothTransport: Link preparation failed: \(error)")
+                    Logger.bluetooth.error(
+                        "❌ CoreBluetoothTransport: Link preparation failed: \(error)")
                     continuation.resume(throwing: error)
                 }
             }
@@ -195,7 +253,7 @@ import Foundation
         public func centralManager(
             _ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?
         ) {
-            print(
+            Logger.bluetooth.info(
                 "❌ CoreBluetoothTransport: Failed to connect to \(peripheral.name ?? "unnamed"): \(error?.localizedDescription ?? "unknown error")"
             )
             guard let continuation = connectContinuations.removeValue(forKey: peripheral.identifier)
@@ -207,8 +265,18 @@ import Foundation
             _ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral,
             error: Error?
         ) {
+            Logger.bluetooth.info(
+                "🔌❌ CoreBluetoothTransport: Peripheral disconnected: \(peripheral.name ?? "unnamed")"
+            )
             if let continuation = connectContinuations.removeValue(forKey: peripheral.identifier) {
                 continuation.resume(throwing: error ?? BluetoothTransportError.closed)
+            }
+            // Notify any active links about the disconnection
+            Task { @MainActor in
+                NotificationCenter.default.post(
+                    name: .bluetoothPeripheralDisconnected,
+                    object: peripheral.identifier
+                )
             }
         }
 
@@ -262,6 +330,7 @@ import Foundation
         private var notificationStateContinuations:
             [BluetoothCharacteristic: CheckedContinuation<Void, Error>] = [:]
         private var isClosed = false
+        private var disconnectionObserver: NSObjectProtocol?
 
         init(
             peripheral: CBPeripheral, descriptor: DiveComputerDescriptor, central: CBCentralManager
@@ -270,20 +339,50 @@ import Foundation
             self.descriptor = descriptor
             self.central = central
             super.init()
+
+            // Monitor for disconnections
+            let peripheralId = peripheral.identifier
+            disconnectionObserver = NotificationCenter.default.addObserver(
+                forName: .bluetoothPeripheralDisconnected,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard let self = self,
+                    let disconnectedId = notification.object as? UUID,
+                    disconnectedId == peripheralId
+                else { return }
+                Task { @MainActor in
+                    await self.handleDisconnection()
+                }
+            }
+        }
+
+        deinit {
+            // Use MainActor.assumeIsolated for cleanup in deinit
+            Task { @MainActor [disconnectionObserver] in
+                if let observer = disconnectionObserver {
+                    NotificationCenter.default.removeObserver(observer)
+                }
+            }
         }
 
         var mtu: Int {
             peripheral.maximumWriteValueLength(for: .withResponse)
         }
 
+        var isConnected: Bool {
+            peripheral.state == .connected
+        }
+
         func prepare() async throws {
-            print("🔧 CoreBluetoothLink: Preparing link for \(peripheral.name ?? "unnamed")")
+            Logger.bluetooth.info(
+                "🔧 CoreBluetoothLink: Preparing link for \(self.peripheral.name ?? "unnamed")")
             peripheral.delegate = self
-            print("🔧 CoreBluetoothLink: Discovering services...")
+            Logger.bluetooth.info("🔧 CoreBluetoothLink: Discovering services...")
             try await discoverServices()
-            print("🔧 CoreBluetoothLink: Discovering characteristics...")
+            Logger.bluetooth.info("🔧 CoreBluetoothLink: Discovering characteristics...")
             try await discoverCharacteristics()
-            print("✅ CoreBluetoothLink: Link preparation complete")
+            Logger.bluetooth.info("✅ CoreBluetoothLink: Link preparation complete")
         }
 
         func read(from characteristic: BluetoothCharacteristic) async throws -> Data {
@@ -295,14 +394,14 @@ import Foundation
         }
 
         func enableNotifications(for characteristic: BluetoothCharacteristic) async throws {
-            print(
+            Logger.bluetooth.info(
                 "🔔 CoreBluetoothLink: Enabling notifications for \(characteristic.characteristic)"
             )
             let cbCharacteristic = try await cbCharacteristic(for: characteristic)
 
             // If already notifying, we're done
             if cbCharacteristic.isNotifying {
-                print("🔔 CoreBluetoothLink: Notifications already enabled")
+                Logger.bluetooth.info("🔔 CoreBluetoothLink: Notifications already enabled")
                 return
             }
 
@@ -311,7 +410,7 @@ import Foundation
                 peripheral.setNotifyValue(true, for: cbCharacteristic)
             }
 
-            print("✅ CoreBluetoothLink: Notifications enabled successfully")
+            Logger.bluetooth.info("✅ CoreBluetoothLink: Notifications enabled successfully")
         }
 
         func write(
@@ -363,12 +462,12 @@ import Foundation
         func getDiscoveredCharacteristics(for service: BluetoothUUID) async throws
             -> [BluetoothCharacteristic]
         {
-            print("🔍 CoreBluetoothLink: Getting discovered characteristics for service \(service)")
+            Logger.bluetooth.info(
+                "🔍 CoreBluetoothLink: Getting discovered characteristics for service \(service)")
 
             // Get all characteristics for this service
             let allChars = characteristicMap.filter { $0.key.service == service }
-            print("🔍 CoreBluetoothLink: Found \(allChars.count) characteristic(s)")
-
+            Logger.bluetooth.info("🔍 CoreBluetoothLink: Found \(allChars.count) characteristic(s)")
             // Log properties of each characteristic to help identify them
             for (bluetoothChar, cbChar) in allChars {
                 var props: [String] = []
@@ -379,7 +478,7 @@ import Foundation
                 }
                 if cbChar.properties.contains(.notify) { props.append("notify") }
                 if cbChar.properties.contains(.indicate) { props.append("indicate") }
-                print(
+                Logger.bluetooth.info(
                     "  📍 Characteristic \(bluetoothChar.characteristic): [\(props.joined(separator: ", "))]"
                 )
             }
@@ -425,6 +524,12 @@ import Foundation
         func close() async {
             guard !isClosed else { return }
             isClosed = true
+
+            if let observer = disconnectionObserver {
+                NotificationCenter.default.removeObserver(observer)
+                disconnectionObserver = nil
+            }
+
             notificationContinuations.values.forEach { $0.finish() }
             notificationContinuations.removeAll()
             readContinuations.values.forEach { $0.resume(throwing: BluetoothTransportError.closed) }
@@ -436,6 +541,36 @@ import Foundation
             if let central {
                 central.cancelPeripheralConnection(peripheral)
             }
+        }
+
+        private func handleDisconnection() async {
+            guard !isClosed else { return }
+            Logger.bluetooth.error("❌ CoreBluetoothLink: Handling disconnection event")
+            isClosed = true
+
+            let error = BluetoothTransportError.disconnected(nil)
+
+            // Fail all pending operations
+            serviceContinuation?.resume(throwing: error)
+            serviceContinuation = nil
+
+            characteristicContinuations.values.forEach { $0.resume(throwing: error) }
+            characteristicContinuations.removeAll()
+
+            readContinuations.values.forEach { $0.resume(throwing: error) }
+            readContinuations.removeAll()
+
+            writeContinuations.values.forEach { $0.resume(throwing: error) }
+            writeContinuations.removeAll()
+
+            notificationStateContinuations.values.forEach { $0.resume(throwing: error) }
+            notificationStateContinuations.removeAll()
+
+            notificationContinuations.values.forEach {
+                _ = $0.yield(with: .failure(error))
+                $0.finish()
+            }
+            notificationContinuations.removeAll()
         }
 
         private func cbCharacteristic(for characteristic: BluetoothCharacteristic) async throws

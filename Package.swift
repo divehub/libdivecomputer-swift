@@ -20,7 +20,10 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "DiveComputerSwift"
+            name: "DiveComputerSwift",
+            resources: [
+                .process("Resources")
+            ]
         ),
         .executableTarget(
             name: "ShearwaterCLI",

@@ -6,3 +6,5 @@ DerivedData/
 .swiftpm
 .netrc
 .vscode
+
+dive_log_*.bin

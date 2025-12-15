@@ -73,7 +73,13 @@ import Foundation
                         "✅ ShearwaterDemoViewModel: Device info: \(info.model ?? "unknown") S/N: \(info.serialNumber ?? "unknown")"
                     )
                     status = "Downloading logs..."
-                    let pulledLogs = try await session.downloadDiveLogs()
+                    status = "Downloading manifest..."
+                    let candidates = try await session.downloadManifest()
+                    print("✅ ShearwaterDemoViewModel: Manifest found \(candidates.count) candidates")
+                    
+                    status = "Downloading \(candidates.count) dives..."
+                    // Download all candidates for the demo
+                    let pulledLogs = try await session.downloadDives(candidates: candidates, progress: nil)
                     logs = pulledLogs
                     print("✅ ShearwaterDemoViewModel: Downloaded \(pulledLogs.count) dive log(s)")
                     status = "Done"

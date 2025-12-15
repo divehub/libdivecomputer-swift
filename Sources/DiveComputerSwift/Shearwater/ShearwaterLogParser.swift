@@ -18,19 +18,48 @@ public struct ShearwaterLogParser {
         public let gradientFactorLow: Int?
         public let gradientFactorHigh: Int?
         public let diveMode: DiveMode?
-        public let waterDensity: Double?  // Added
-        public let notes: String
+        public let waterDensity: Double?
+        public let timeZoneOffset: TimeInterval?
         public let fingerprint: Data?
     }
 
-    // Using global DiveSample and GasMix from DiveComputerModels.swift
+    // --- Internal Helpers ---
 
-    // Record types (First byte of the 32-byte block)
+    private struct DataReader {
+        let data: Data
+        
+        func u8(at offset: Int) -> UInt8? {
+            guard offset < data.count else { return nil }
+            return data[offset]
+        }
+        
+        func u16be(at offset: Int) -> UInt16? {
+            guard offset + 1 < data.count else { return nil }
+            return (UInt16(data[offset]) << 8) | UInt16(data[offset + 1])
+        }
+        
+        func u24be(at offset: Int) -> UInt32? {
+            guard offset + 2 < data.count else { return nil }
+            return (UInt32(data[offset]) << 16) | (UInt32(data[offset + 1]) << 8) | UInt32(data[offset + 2])
+        }
+
+        func u32be(at offset: Int) -> UInt32? {
+            guard offset + 3 < data.count else { return nil }
+            return (UInt32(data[offset]) << 24) | (UInt32(data[offset + 1]) << 16)
+                | (UInt32(data[offset + 2]) << 8) | UInt32(data[offset + 3])
+        }
+        
+        func subdata(at offset: Int, length: Int) -> Data? {
+            guard offset + length <= data.count else { return nil }
+            return data.subdata(in: offset..<offset + length)
+        }
+    }
+
     private enum RecordType: UInt8 {
         case diveSample = 0x01
         case freediveSample = 0x02
         case aveloSample = 0x03
-
+        
         case opening0 = 0x10
         case opening1 = 0x11
         case opening2 = 0x12
@@ -39,7 +68,7 @@ public struct ShearwaterLogParser {
         case opening5 = 0x15
         case opening6 = 0x16
         case opening7 = 0x17
-
+        
         case closing0 = 0x20
         case closing1 = 0x21
         case closing2 = 0x22
@@ -48,57 +77,105 @@ public struct ShearwaterLogParser {
         case closing5 = 0x25
         case closing6 = 0x26
         case closing7 = 0x27
-
+        
         case info = 0x30
         case diveSampleExt = 0xE1
         case final = 0xFF
     }
 
-    // PNF Block Size is 32 bytes
     private static let blockSize = 32
 
+    // --- Main Parse Entry Point ---
+
     public static func parse(data: Data) -> ParsedDive? {
-        // Enforce 32-byte alignment/size
         guard data.count >= blockSize else { return nil }
 
+        // 1. Extract Records
+        let (rawSamples, openingRecords, closingRecords, finalRecord, _) = extractRecords(from: data)
+        
+        // 2. Parse Headers / Metadata
+        let headers = parseHeaders(openingRecords: openingRecords, closingRecords: closingRecords, finalRecord: finalRecord)
+        guard let startTime = headers.startTime else { return nil }
+        
+        // 3. Parse Samples
+        let samples = parseSamples(
+            rawSamples: rawSamples,
+            startTime: startTime,
+            headers: headers
+        )
+        
+        guard !samples.isEmpty else { return nil }
+        
+        // 4. Calculate Stats (Fallback)
+        let calcMaxDepth = samples.max(by: { $0.depthMeters < $1.depthMeters })?.depthMeters ?? 0
+        let calcAvgDepth = samples.reduce(0.0) { $0 + $1.depthMeters } / Double(samples.count)
+        let calcDuration = rawSamples.last?.timeOffset ?? 0
+        
+        // Prefer Closing Record stats if available
+        let maxDepth = headers.maxDepth ?? calcMaxDepth
+        let duration = headers.duration ?? calcDuration
+
+        return ParsedDive(
+            startTime: startTime,
+            duration: .seconds(duration),
+            maxDepth: maxDepth,
+            avgDepth: calcAvgDepth,
+            surfacePressure: headers.surfacePressure,
+            samples: samples,
+            gasMixes: headers.gasMixes,
+            tanks: headers.tanks,
+            decoModel: headers.decoModel,
+            gradientFactorLow: headers.gfLow,
+            gradientFactorHigh: headers.gfHigh,
+            diveMode: headers.diveMode,
+            waterDensity: headers.waterDensity,
+            timeZoneOffset: headers.timeZoneOffset,
+            fingerprint: headers.fingerprint
+        )
+    }
+
+    // --- Phase 1: Record Extraction ---
+
+    private static func extractRecords(from data: Data) -> (
+        samples: [(timeOffset: TimeInterval, data: DataReader)],
+        opening: [RecordType: DataReader],
+        closing: [RecordType: DataReader],
+        final: DataReader?,
+        interval: TimeInterval
+    ) {
         var offset = 0
-        var rawSamples: [(timeOffset: TimeInterval, data: Data)] = []
-        var openingRecords: [UInt8: Data] = [:]
-        var finalRecord: Data?
-
-        // Default sample interval (can be overriden by Opening 5)
-        var sampleInterval: TimeInterval = 10.0  // Default 10s
+        var samples: [(TimeInterval, DataReader)] = []
+        var opening: [RecordType: DataReader] = [:]
+        var closing: [RecordType: DataReader] = [:]
+        var final: DataReader? = nil
+        
+        var sampleInterval: TimeInterval = 10.0
         var currentTime: TimeInterval = 0
-
-        // --- First Pass: Collect raw blocks and metadata ---
+        
         while offset + blockSize <= data.count {
             let blockData = data.subdata(in: offset..<offset + blockSize)
-            let recordTypeByte = blockData[0]
-
-            if let type = RecordType(rawValue: recordTypeByte) {
+            let reader = DataReader(data: blockData)
+            
+            if let typeByte = reader.u8(at: 0), let type = RecordType(rawValue: typeByte) {
                 switch type {
                 case .diveSample:
-                    // Advance time
                     currentTime += sampleInterval
-                    rawSamples.append((currentTime, blockData))
-
-                case .opening0, .opening1, .opening2, .opening3, .opening4, .opening5, .opening6,
-                    .opening7:
-                    openingRecords[recordTypeByte] = blockData
-
-                    // If Opening 5, check sample interval
-                    if type == .opening5 {
-                        // Offset 23 in Opening 5 contains sample interval in ms
-                        if 23 + 2 <= blockData.count {
-                            let intervalMs = u16be(blockData, at: 23)
-                            if intervalMs > 0 {
-                                sampleInterval = TimeInterval(intervalMs) / 1000.0
-                            }
-                        }
+                    samples.append((currentTime, reader))
+                    
+                case .opening0, .opening1, .opening2, .opening3, .opening4, .opening5, .opening6, .opening7:
+                    opening[type] = reader
+                    
+                    // Check Sample Interval in Opening 5
+                    if type == .opening5, let intervalMs = reader.u16be(at: 23), intervalMs > 0 {
+                        sampleInterval = TimeInterval(intervalMs) / 1000.0
                     }
+                    
+                case .closing0, .closing1, .closing2, .closing3, .closing4, .closing5, .closing6, .closing7:
+                    closing[type] = reader
 
                 case .final:
-                    finalRecord = blockData
+                    final = reader
+                    
                 default:
                     break
                 }
@@ -106,384 +183,347 @@ public struct ShearwaterLogParser {
             offset += blockSize
         }
         
-        // --- Extract Fingerprint ---
-        // Fingerprint is 4 bytes at offset 12 in Opening 0
-        var fingerprint: Data?
-        if let op0 = openingRecords[RecordType.opening0.rawValue], op0.count >= 16 {
-            fingerprint = op0.subdata(in: 12..<16)
-        }
-
-        // --- Parse Start Time ---
-        // From Opening Record 0 (0x10), offset 12 (Same as fingerprint)
-        // Original format is usually a 32-bit timestamp
+        return (samples, opening, closing, final, sampleInterval)
+    }
+    
+    // --- Phase 2: Header Parsing ---
+    
+    private struct Headers {
         var startTime: Date?
-        if let op0 = openingRecords[RecordType.opening0.rawValue] {
-            let timestamp = u32be(op0, at: 12)
-            if timestamp > 0 {
-                // If it looks like a valid epoch (e.g. > year 2000), use it
-                // Shearwater timestamps are typically standard unix epoch
-                startTime = Date(timeIntervalSince1970: TimeInterval(timestamp))
-            }
-        }
-        
-        // Fallback: Try Opening 2 (0x12) offset 20 if Opening 0 fails
-        if startTime == nil, let op2 = openingRecords[RecordType.opening2.rawValue] {
-             let timestamp = u32be(op2, at: 20)
-             if timestamp > 0 {
-                 startTime = Date(timeIntervalSince1970: TimeInterval(timestamp))
-             }
-        }
-        
-        // --- Process Metadata FIRST (Dependencies for Samples) ---
-
-        // 2. Units (Opening 0, Byte 8)
-        var isImperial = false
-        if let op0 = openingRecords[RecordType.opening0.rawValue], op0.count > 8 {
-            isImperial = (op0[8] == 1)
-        }
-
-        // 3. Log Version (Opening 4, Byte 16) & Dive Mode
-        var logVersion: Int = 0
+        var duration: Double? // Added
+        var maxDepth: Double? // Added
+        var fingerprint: Data?
         var diveMode: DiveMode?
-
-        if let op4 = openingRecords[RecordType.opening4.rawValue] {
-            if 16 < op4.count { logVersion = Int(op4[16]) }
-
-            if 1 < op4.count {
-                let modeByte = op4[1]
-                switch modeByte {
-                case 0, 5: diveMode = .ccr
-                case 1: diveMode = .ocTec
-                case 2: diveMode = .gauge
-                case 3: diveMode = .ppo2
-                case 4: diveMode = .semiClosed
-                case 6: diveMode = .ocRec
-                case 7: diveMode = .freedive
-                case 12: diveMode = .avelo
-                default: diveMode = .unknown
-                }
-            }
-        }
-
-        // 4. Deco Model (Opening 2)
+        var isImperial: Bool
+        var isTeric: Bool
+        var logVersion: Int
+        var isAIEnabled: Bool
+        var timeZoneOffset: TimeInterval?
         var decoModel: String?
-        if let op2 = openingRecords[RecordType.opening2.rawValue] {
-            if 18 < op2.count {
-                let modelByte = op2[18]
+        var waterDensity: Double?
+        var surfacePressure: Double?
+        var gfLow: Int?
+        var gfHigh: Int?
+        var gasMixes: [GasMix]
+        var tanks: [DiveTank]
+        var calibration: [Double]
+    }
+
+    private static func parseHeaders(openingRecords: [RecordType: DataReader], closingRecords: [RecordType: DataReader], finalRecord: DataReader?) -> Headers {
+        var h = Headers(
+            startTime: nil, duration: nil, maxDepth: nil, fingerprint: nil, diveMode: nil, isImperial: false, isTeric: false,
+            logVersion: 0, isAIEnabled: false, timeZoneOffset: nil, decoModel: nil, waterDensity: nil, surfacePressure: nil,
+            gfLow: nil, gfHigh: nil, gasMixes: [], tanks: [], calibration: [0,0,0]
+        )
+        
+        // Opening 0
+        if let op0 = openingRecords[.opening0] {
+            h.fingerprint = op0.subdata(at: 12, length: 4)
+            
+            if let ts = op0.u32be(at: 12), ts > 0 {
+                h.startTime = Date(timeIntervalSince1970: TimeInterval(ts))
+            }
+            
+            h.isImperial = (op0.u8(at: 8) == 1)
+            
+            h.gfLow = op0.u8(at: 4).map { Int($0) }
+            h.gfHigh = op0.u8(at: 5).map { Int($0) }
+        }
+        
+        // Closing 0 (Stats)
+        if let cl0 = closingRecords[.closing0] {
+            // Duration: 3 bytes at offset 6 (seconds)
+            if let durSec = cl0.u24be(at: 6) {
+                h.duration = Double(durSec)
+            }
+            
+            // Max Depth: 2 bytes at offset 4
+            if let maxRaw = cl0.u16be(at: 4) {
+                 var maxD = Double(maxRaw)
+                 if h.isImperial {
+                     maxD *= 0.3048
+                 }
+                 // PNF format divides by 10.0
+                 maxD /= 10.0
+                 h.maxDepth = maxD
+            }
+        }
+        
+        // Opening 2 (Backup StartTime & DecoModel)
+        if let op2 = openingRecords[.opening2] {
+            if h.startTime == nil, let ts = op2.u32be(at: 20), ts > 0 {
+                h.startTime = Date(timeIntervalSince1970: TimeInterval(ts))
+            }
+            
+            if let modelByte = op2.u8(at: 18) {
                 switch modelByte {
-                case 0: decoModel = "Buhlmann ZHL-16C"
-                case 1: decoModel = "VPM-B"
-                case 2: decoModel = "VPM-B/GFS"
-                case 3: decoModel = "DCIEM"
-                default: decoModel = "Unknown (\(modelByte))"
+                case 0: h.decoModel = "Buhlmann ZHL-16C"
+                case 1: h.decoModel = "VPM-B"
+                case 2: h.decoModel = "VPM-B/GFS"
+                case 3: h.decoModel = "DCIEM"
+                default: h.decoModel = "Unknown (\(modelByte))"
                 }
             }
         }
-
-        // 5. Water Density
-        // Opening 3: Density
-        var waterDensity: Double?
-        if let op3 = openingRecords[RecordType.opening3.rawValue] {
-            let densityRaw = u16be(op3, at: 3)
-            if densityRaw > 0 {
-                waterDensity = Double(densityRaw)
+        
+        // Opening 4 (Mode, Version, Gases Enabled)
+        var gasesEnabled = 0x1F // Default: First 5 gases
+        if let op4 = openingRecords[.opening4] {
+            h.logVersion = Int(op4.u8(at: 16) ?? 0)
+            
+            if let modeByte = op4.u8(at: 1) {
+                switch modeByte {
+                case 0, 5: h.diveMode = .ccr
+                case 1: h.diveMode = .ocTec
+                case 2: h.diveMode = .gauge
+                case 3: h.diveMode = .ppo2
+                case 4: h.diveMode = .semiClosed
+                case 6: h.diveMode = .ocRec
+                case 7: h.diveMode = .freedive
+                case 12: h.diveMode = .avelo
+                default: h.diveMode = .unknown
+                }
+            }
+            
+            if let enabledString = op4.u16be(at: 17) {
+                 gasesEnabled = Int(enabledString)
+            }
+            
+            // AI check (Byte 28)
+            if let aiMode = op4.u8(at: 28) {
+                h.isAIEnabled = (aiMode != 0)
             }
         }
-
-        // 6. Tanks (Opening 5, 6, 7)
-        var tanks: [DiveTank] = []
-        var model = 0
-        if let final = finalRecord, 13 < final.count {
-            model = Int(final[13])
+        
+        // Gases (Opening 0 & 1)
+        if let op0 = openingRecords[.opening0] {
+            let o2s = (0..<10).map { op0.u8(at: 20 + $0) ?? 0 }
+            var hes = [UInt8](repeating: 0, count: 10)
+            
+            hes[0] = op0.u8(at: 30) ?? 0
+            hes[1] = op0.u8(at: 31) ?? 0
+            
+            if let op1 = openingRecords[.opening1] {
+                for i in 2..<10 {
+                    hes[i] = op1.u8(at: 1 + (i - 2)) ?? 0
+                }
+            }
+            
+            let isCCR = (h.diveMode == .ccr || h.diveMode == .semiClosed)
+            
+            for i in 0..<10 {
+                let isEnabled = (gasesEnabled & (1 << i)) != 0
+                let isDiluent = (i >= 5)
+                
+                if !isEnabled { continue }
+                if isDiluent && !isCCR { continue }
+                if o2s[i] == 0 && hes[i] == 0 { continue }
+                
+                h.gasMixes.append(GasMix(
+                    oxygenFraction: Double(o2s[i]) / 100.0,
+                    heliumFraction: Double(hes[i]) / 100.0,
+                    isDiluent: isDiluent
+                ))
+            }
         }
-        let isTeric = (model == 8)
-
+        
+        // Model & Timezone
+        if let final = finalRecord, let modelByte = final.u8(at: 13) {
+            h.isTeric = (modelByte == 8)
+        }
+        
+        if h.isTeric && h.logVersion >= 9, let op5 = openingRecords[.opening5] {
+            if let utcOffset = op5.u32be(at: 26).map({ Int32(bitPattern: $0) }),
+               let dstByte = op5.u8(at: 30) {
+                let dst = Int32(dstByte)
+                h.timeZoneOffset = TimeInterval(utcOffset * 60 + dst * 3600)
+            }
+        }
+        
+        // Other Metadata
+        if let op3 = openingRecords[.opening3] {
+            if let density = op3.u16be(at: 3), density > 0 {
+                h.waterDensity = Double(density)
+            }
+            
+            // Calibration
+            let mask = op3.u8(at: 6) ?? 0
+            for i in 0..<3 {
+                if (mask & (1 << i)) != 0, let calRaw = op3.u16be(at: 7 + i * 2) {
+                    let factor = Double(calRaw) / 100000.0
+                    // Predator (Model 2) fix would go here if we tracked model more precisely, omit for now or check finalRecord
+                    h.calibration[i] = factor
+                }
+            }
+        }
+        
+        if let op1 = openingRecords[.opening1] {
+            if let p = op1.u16be(at: 16), p > 0 {
+                h.surfacePressure = Double(p) / 1000.0
+            }
+        }
+        
+        // Tanks
+        parseTanks(into: &h, openingRecords: openingRecords)
+        
+        return h
+    }
+    
+    private static func parseTanks(into h: inout Headers, openingRecords: [RecordType: DataReader]) {
         func formatSerial(_ b1: UInt8, _ b2: UInt8, _ b3: UInt8) -> String {
-            if isTeric {
+            if h.isTeric {
                 return String(format: "%02X%02X%02X", b3, b2, b1)
             } else {
                 return String(format: "%02X%02X%02X", b1, b2, b3)
             }
         }
-
-        if let op5 = openingRecords[RecordType.opening5.rawValue] {
-            // Tank 1 (Offset 1)
-            if op5.count > 3 {
-                let s1 = formatSerial(op5[1], op5[2], op5[3])
-                if s1 != "000000" {
-                    tanks.append(DiveTank(name: "Tank 1", serialNumber: s1, usage: .unknown))
-                }
-            }
-            // Tank 2 (Offset 10)
-            if op5.count > 12 {
-                let s2 = formatSerial(op5[10], op5[11], op5[12])
-                if s2 != "000000" {
-                    tanks.append(DiveTank(name: "Tank 2", serialNumber: s2, usage: .unknown))
-                }
+        
+        func addTank(name: String, b1: UInt8?, b2: UInt8?, b3: UInt8?) {
+            guard let b1 = b1, let b2 = b2, let b3 = b3 else { return }
+            let s = formatSerial(b1, b2, b3)
+            if s != "000000" {
+                h.tanks.append(DiveTank(name: name, serialNumber: s, usage: .unknown))
             }
         }
 
-        if let op6 = openingRecords[RecordType.opening6.rawValue] {
-            // Tank 3 (Offset 25)
-            if op6.count > 27 {
-                let s3 = formatSerial(op6[25], op6[26], op6[27])
-                if s3 != "000000" {
-                    tanks.append(DiveTank(name: "Tank 3", serialNumber: s3, usage: .unknown))
-                }
-            }
+        if let op5 = openingRecords[.opening5] {
+            addTank(name: "Tank 1", b1: op5.u8(at: 1), b2: op5.u8(at: 2), b3: op5.u8(at: 3))
+            addTank(name: "Tank 2", b1: op5.u8(at: 10), b2: op5.u8(at: 11), b3: op5.u8(at: 12))
         }
-
-        if let op7 = openingRecords[RecordType.opening7.rawValue] {
-            // Tank 4 (Offset 4)
-            if op7.count > 6 {
-                let s4 = formatSerial(op7[4], op7[5], op7[6])
-                if s4 != "000000" {
-                    tanks.append(DiveTank(name: "Tank 4", serialNumber: s4, usage: .unknown))
-                }
-            }
+        if let op6 = openingRecords[.opening6] {
+            addTank(name: "Tank 3", b1: op6.u8(at: 25), b2: op6.u8(at: 26), b3: op6.u8(at: 27))
         }
-
-        // 8. Gases & GF (Opening 0)
-        var gasMixes: [GasMix] = []
-        var gfLow: Int?
-        var gfHigh: Int?
-
-        if let op0 = openingRecords[RecordType.opening0.rawValue] {
-            if 5 < op0.count {
-                gfLow = Int(op0[4])
-                gfHigh = Int(op0[5])
-            }
-
-            var o2s: [UInt8] = []
-            for i in 0..<5 {
-                if 20 + i < op0.count { o2s.append(op0[20 + i]) } else { o2s.append(0) }
-            }
-
-            var hes: [UInt8] = [0, 0, 0, 0, 0]
-            if 30 < op0.count { hes[0] = op0[30] }
-            if 31 < op0.count { hes[1] = op0[31] }
-
-            // Opening 1 has more He
-            if let op1 = openingRecords[RecordType.opening1.rawValue] {
-                if 1 < op1.count { hes[2] = op1[1] }
-                if 2 < op1.count { hes[3] = op1[2] }
-                if 3 < op1.count { hes[4] = op1[3] }
-            }
-
-            for i in 0..<5 {
-                if o2s[i] > 0 {
-                    gasMixes.append(
-                        GasMix(
-                            oxygenFraction: Double(o2s[i]) / 100.0,
-                            heliumFraction: Double(hes[i]) / 100.0
-                        ))
-                }
-            }
+        if let op7 = openingRecords[.opening7] {
+            addTank(name: "Tank 4", b1: op7.u8(at: 4), b2: op7.u8(at: 5), b3: op7.u8(at: 6))
         }
-
-        // 9. Surface Pressure (Opening 1)
-        var surfacePressureBar: Double?
-        if let op1 = openingRecords[RecordType.opening1.rawValue] {
-            let pressureMbar = u16be(op1, at: 16)
-            if pressureMbar > 0 {
-                surfacePressureBar = Double(pressureMbar) / 1000.0
-            }
-        }
-
-        // 10. Calibration (Opening 3)
-        var calibration: [Double] = [0.0, 0.0, 0.0]
-
-        if let op3 = openingRecords[RecordType.opening3.rawValue], op3.count > 12 {
-            // Index 6 is mask
-            let mask = op3[6]
-            for i in 0..<3 {
-                if (mask & (1 << i)) != 0 {
-                    let calRaw = u16be(op3, at: 7 + i * 2)
-                    var factor = Double(calRaw) / 100000.0
-                    // Predator (Model 2) Fix
-                    if model == 2 {
-                        factor *= 2.2
-                    }
-                    calibration[i] = factor
-                }
-            }
-        }
-
-        // --- 2nd Pass: Process Samples ---
+    }
+    
+    // --- Phase 3: Sample Parsing ---
+    
+    private static func parseSamples(
+        rawSamples: [(TimeInterval, DataReader)],
+        startTime: Date,
+        headers: Headers
+    ) -> [DiveSample] {
         var samples: [DiveSample] = []
         var lastO2: UInt8 = 0
         var lastHe: UInt8 = 0
         var lastIsOC: Bool? = nil
-
-        for (timeOffset, blockData) in rawSamples {
-            // Byte 1: Depth MSB
-            // Status Flags are at Offset 12 (Index 12) for PNF
-            let statusByte = blockData[12]
-            // OC bit is 0x10 (Bit 4). If set, it's OC. If clear, it's CCR.
+        
+        for (timeOffset, reader) in rawSamples {
+            guard let statusByte = reader.u8(at: 12) else { continue }
+            
             let isOC = (statusByte & 0x10) != 0
-
-            // PPO2 External (0x02). User/Analysis suggests 0 means External (or Active Sensors).
             let isExternalPPO2 = (statusByte & 0x02) == 0
-
-            // Mask Depth (14 bits) -> C code does NOT mask.
-            // C: unsigned int depth = array_uint16_be (data + pnf + offset);
-            let depthRaw = u16be(blockData, at: 1)
-            let depthMeters: Double
-            if isImperial {
-                // C: sample.depth = depth * FEET / 10.0;
-                // FEET = 0.3048
-                depthMeters = Double(depthRaw) * 0.3048 * 0.1
-            } else {
-                depthMeters = Double(depthRaw) * 0.1
-            }
-
+            
+            // Depth
+            let depthRaw = reader.u16be(at: 1) ?? 0
+            let depthMeters = headers.isImperial
+                ? Double(depthRaw) * 0.3048 * 0.1
+                : Double(depthRaw) * 0.1
+            
             // Temp
-            // Temp
-            var tempCelsius: Double
-            // C code: data[offset + pnf + 13] -> Index 14 for PNF
-            if 14 < blockData.count {
-                var tempInt = Int(Int8(bitPattern: blockData[14]))
-
-                // C-style fix for negative temperatures
+            var tempCelsius: Double = 0
+            if let tByte = reader.u8(at: 14) {
+                var tempInt = Int(Int8(bitPattern: tByte))
                 if tempInt < 0 {
                     tempInt += 102
                     if tempInt > 0 { tempInt = 0 }
                 }
-
-                if isImperial {
-                    // C code: (temp - 32) * 5/9.
-                    // Shearwater stores F if unit bit is set.
-                    tempCelsius = (Double(tempInt) - 32.0) * (5.0 / 9.0)
-                } else {
-                    tempCelsius = Double(tempInt)
-                }
-            } else {
-                tempCelsius = 0
+                tempCelsius = headers.isImperial
+                    ? (Double(tempInt) - 32.0) * (5.0 / 9.0)
+                    : Double(tempInt)
             }
-
-            // Tank Pressure (AI)
-            var pressureBar: Double? = nil
-            // Check AI Mode from Opening 4
-            // LogVersion >= 7 checks Byte 28.
-            var isAIEnabled = false
-            if let op4 = openingRecords[RecordType.opening4.rawValue], op4.count > 28 {
-                let aiMode = op4[28]
-                isAIEnabled = (aiMode != 0)
-            }
-
-            if isAIEnabled {
+            
+            // Pressure
+            var pressureBar: Double?
+            if headers.isAIEnabled {
                 // User snippet suggests Offset 27.
                 // C code suggests offset + pnf + 27 (28 if PNF).
                 // We'll trust User Snippet for LogVer 14.
-                let pressureOffset = (logVersion > 14) ? 28 : 27
-
-                if pressureOffset + 1 < blockData.count {
-                    let pressureRaw = u16be(blockData, at: pressureOffset)
-                    if pressureRaw < 0xFFF0 {
-                        let pressurePsi = Double(pressureRaw & 0x0FFF) * 2.0
-                        pressureBar = pressurePsi * 0.0689476
-                    }
-                }
+                let pressureOffset = (headers.logVersion > 14) ? 28 : 27
+                
+                if let pRaw = reader.u16be(at: pressureOffset), pRaw < 0xFFF0 {
+                   let pPsi = Double(pRaw & 0x0FFF) * 2.0
+                   pressureBar = pPsi * 0.0689476
+               }
             }
-
-            // Detailed Fields
-            var ppo2: Double?
-            var setpoint: Double?
-            var cns: Double?
+            
+            // PPO2
+            let ppo2 = reader.u8(at: 7).map { Double($0) / 100.0 }
+            
             var ppo2Sensors: [Double]?
-
-            // Logic PPO2 is at Index 7
-            let ppo2Value = Double(blockData[7]) / 100.0
-            if ppo2Value > 0 { ppo2 = ppo2Value }
-
-            // Sensors (Internal/External) if NOT OC and Flag implies Sensors Present
-            // If isExternalPPO2 (from 0x02 == 0) is true, we parse.
             if !isOC && isExternalPPO2 {
-                // Sensor 0: Index 13 (offset 12 + 1)
-                // Sensor 1: Index 15 (offset 14 + 1)
-                // Sensor 2: Index 16 (offset 15 + 1)
-                if blockData.count > 16 {
-                    let s0 = Double(blockData[13]) * calibration[0]
-                    let s1 = Double(blockData[15]) * calibration[1]
-                    let s2 = Double(blockData[16]) * calibration[2]
+                let s0 = reader.u8(at: 13).map { Double($0) * headers.calibration[0] }
+                let s1 = reader.u8(at: 15).map { Double($0) * headers.calibration[1] }
+                let s2 = reader.u8(at: 16).map { Double($0) * headers.calibration[2] }
+                if let s0, let s1, let s2 {
                     ppo2Sensors = [s0, s1, s2]
                 }
             }
-
-            let sp = Double(blockData[19]) / 100.0
-            if sp > 0 { setpoint = sp }
-
-            let cnsVal = Double(blockData[23]) / 100.0
-            cns = cnsVal
-
+            
+            let setpoint = reader.u8(at: 19).map { Double($0) / 100.0 }
+            let cns = reader.u8(at: 23).map { Double($0) / 100.0 }
+            
             // Deco
-            let stopDepthRaw = u16be(blockData, at: 3)
             var decoCeiling: Double?
             var decoStopDepth: Double?
             var decoStopTime: Double?
-            var noDecompressionLimit: TimeInterval?
-
-            let decoTimeMin = Double(blockData[10])
-
-            var tts: TimeInterval?
-            // C: sample.deco.tts = array_uint16_be (data + offset + pnf + 4) * 60;
-            // PNF=1, so index is 1+4 = 5.
-            let ttsMin = u16be(blockData, at: 5)
-            if ttsMin > 0 {
-                tts = Double(ttsMin) * 60.0
-            }
-
+            var ndl: TimeInterval?
+            
+            let decoTimeMin = Double(reader.u8(at: 10) ?? 0)
+            let stopDepthRaw = reader.u16be(at: 3) ?? 0
+            
             if stopDepthRaw > 0 {
-                let depth = Double(stopDepthRaw)  // m
-                decoStopDepth = depth
-                decoCeiling = depth
+                let d = headers.isImperial
+                    ? Double(stopDepthRaw) * 0.3048
+                    : Double(stopDepthRaw)
+                decoStopDepth = d
+                decoCeiling = d
                 decoStopTime = decoTimeMin * 60
             } else {
-                if decoTimeMin < 99 {
-                    noDecompressionLimit = decoTimeMin * 60
-                } else {
-                    noDecompressionLimit = 99 * 60
-                }
+                ndl = (decoTimeMin < 99) ? decoTimeMin * 60 : 99 * 60
             }
-
+            
+            let tts = reader.u16be(at: 5).map { Double($0) * 60.0 }
+            
+            // Events (Gas Change)
             var events: [DiveEvent] = []
-
-            // Gas Change
-            let gasO2 = blockData[8]
-            let gasHe = blockData[9]
-
+            let gasO2 = reader.u8(at: 8) ?? 0
+            let gasHe = reader.u8(at: 9) ?? 0
+            
             if gasO2 > 0 || gasHe > 0 {
                 let gasChanged = (gasO2 != lastO2 || gasHe != lastHe)
                 let modeChanged = (lastIsOC != nil && lastIsOC != isOC)
-
+                
                 if gasChanged || modeChanged {
-                    // Emit event
                     let mix = GasMix(
-                        oxygenFraction: Double(gasO2) / 100.0, heliumFraction: Double(gasHe) / 100.0
+                        oxygenFraction: Double(gasO2) / 100.0,
+                        heliumFraction: Double(gasHe) / 100.0,
+                        isDiluent: !isOC // If we switched to it in CCR mode, likely a diluent switch
                     )
-
+                    
                     if isOC {
                         events.append(.gasChange(mix))
                     } else {
                         events.append(.diluentChange(mix))
                     }
-
+                    
                     lastO2 = gasO2
                     lastHe = gasHe
                 }
             }
-
             lastIsOC = isOC
-
-            let sample = DiveSample(
-                timestamp: (startTime ?? Date()).addingTimeInterval(timeOffset),
+            
+            samples.append(DiveSample(
+                timestamp: startTime.addingTimeInterval(timeOffset),
                 depthMeters: depthMeters,
                 temperatureCelsius: tempCelsius,
                 tankPressureBar: pressureBar,
                 ppo2: ppo2,
                 setpoint: setpoint,
                 cns: cns,
-                noDecompressionLimit: noDecompressionLimit,
+                noDecompressionLimit: ndl,
                 decoCeiling: decoCeiling,
                 decoStopDepth: decoStopDepth,
                 decoStopTime: decoStopTime,
@@ -492,45 +532,9 @@ public struct ShearwaterLogParser {
                 ppo2Sensors: ppo2Sensors,
                 isExternalPPO2: isExternalPPO2,
                 tts: tts
-            )
-            samples.append(sample)
+            ))
         }
-
-        guard let finalStartTime = startTime, !samples.isEmpty else {
-            return nil
-        }
-
-        let maxDepth = samples.max(by: { $0.depthMeters < $1.depthMeters })?.depthMeters ?? 0
-        let avgDepth = samples.reduce(0.0) { $0 + $1.depthMeters } / Double(samples.count)
-
-        return ParsedDive(
-            startTime: finalStartTime,
-            duration: .seconds(currentTime),
-            maxDepth: maxDepth,
-            avgDepth: avgDepth,
-            surfacePressure: surfacePressureBar,
-            samples: samples,
-            gasMixes: gasMixes,
-            tanks: tanks,
-            decoModel: decoModel,
-            gradientFactorLow: gfLow,
-            gradientFactorHigh: gfHigh,
-            diveMode: diveMode,
-            waterDensity: waterDensity,
-            notes: "Imported from Shearwater Log (PNF)",
-            fingerprint: fingerprint
-        )
-    }
-
-    // Helpers
-    private static func u16be(_ data: Data, at offset: Int) -> UInt16 {
-        guard offset + 1 < data.count else { return 0 }
-        return (UInt16(data[offset]) << 8) | UInt16(data[offset + 1])
-    }
-
-    private static func u32be(_ data: Data, at offset: Int) -> UInt32 {
-        guard offset + 3 < data.count else { return 0 }
-        return (UInt32(data[offset]) << 24) | (UInt32(data[offset + 1]) << 16)
-            | (UInt32(data[offset + 2]) << 8) | UInt32(data[offset + 3])
+        
+        return samples
     }
 }

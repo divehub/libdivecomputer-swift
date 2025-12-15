@@ -8,6 +8,7 @@ public enum BluetoothTransportError: Error {
     case timedOut
     case missingCharacteristic(BluetoothCharacteristic)
     case closed
+    case disconnected(Error?)
     case underlying(Error)
 }
 
@@ -43,6 +44,7 @@ public struct BluetoothDiscovery: Identifiable, Sendable {
 public protocol BluetoothLink: AnyObject {
     var descriptor: DiveComputerDescriptor { get }
     var mtu: Int { get }
+    var isConnected: Bool { get }
     func read(from characteristic: BluetoothCharacteristic) async throws -> Data
     func write(_ data: Data, to characteristic: BluetoothCharacteristic, type: BluetoothWriteType)
         async throws
@@ -60,8 +62,29 @@ public protocol BluetoothLink: AnyObject {
     func close() async
 }
 
+public enum BluetoothState: Sendable, CustomStringConvertible {
+    case unknown
+    case resetting
+    case unsupported
+    case unauthorized
+    case poweredOff
+    case poweredOn
+    
+    public var description: String {
+        switch self {
+        case .unknown: return "unknown"
+        case .resetting: return "resetting"
+        case .unsupported: return "unsupported"
+        case .unauthorized: return "unauthorized"
+        case .poweredOff: return "powered off"
+        case .poweredOn: return "powered on"
+        }
+    }
+}
+
 @MainActor
 public protocol BluetoothTransport: AnyObject {
+    var bluetoothState: AsyncStream<BluetoothState> { get }
     func scan(descriptors: [DiveComputerDescriptor], timeout: Duration) -> AsyncThrowingStream<
         BluetoothDiscovery, Error
     >
