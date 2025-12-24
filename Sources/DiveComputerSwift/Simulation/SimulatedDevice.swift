@@ -178,7 +178,7 @@ public final class SimulatedDriverSession: DiveComputerDriverSession {
 
     public func downloadManifest() async throws -> [DiveLogCandidate] {
         // Simulate manifest download delay
-        try await Task.sleep(for: .seconds(1))
+        try await Task.sleep(for: .seconds(0.5))
 
         var candidates: [DiveLogCandidate] = []
         for (index, log) in bundledLogs.enumerated() {
@@ -197,9 +197,9 @@ public final class SimulatedDriverSession: DiveComputerDriverSession {
         candidates: [DiveLogCandidate],
         progress: DiveDownloadProgress?
     ) async throws -> [DiveLog] {
-        // Simulate 5KB/s download speed
+        // Simulate 25KB/s download speed
         let chunkSize = 256
-        let sleepPerChunk = Duration.milliseconds(50)
+        let sleepPerChunk = Duration.milliseconds(10)
 
         var result: [DiveLog] = []
         let totalLogs = candidates.count
@@ -288,7 +288,8 @@ public final class SimulatedDriverSession: DiveComputerDriverSession {
                         waterDensity: parsed.waterDensity,
                         fingerprint: parsed.fingerprint?.map { String(format: "%02X", $0) }
                             .joined(),
-                        rawData: data
+                        rawData: data,
+                        format: .shearwater
                     )
                     logs.append(log)
                     sizes[log] = data.count

@@ -29,13 +29,15 @@ public struct DiveComputerInfo: Sendable, Hashable {
 }
 
 public struct GasMix: Sendable, Hashable {
-    public var oxygenFraction: Double
-    public var heliumFraction: Double
+    /// Fractional O2 content in range 0.0...1.0
+    public var o2: Double
+    /// Fractional He content in range 0.0...1.0
+    public var he: Double
     public var isDiluent: Bool
 
-    public init(oxygenFraction: Double, heliumFraction: Double = 0, isDiluent: Bool = false) {
-        self.oxygenFraction = oxygenFraction
-        self.heliumFraction = heliumFraction
+    public init(o2: Double, he: Double = 0, isDiluent: Bool = false) {
+        self.o2 = o2
+        self.he = he
         self.isDiluent = isDiluent
     }
 }
@@ -110,6 +112,8 @@ public struct DiveSample: Sendable, Hashable {
     public var decoCeiling: Double?
     public var decoStopDepth: Double?
     public var decoStopTime: TimeInterval?
+    /// Active gas mix at this sample (fractions are 0.0...1.0).
+    public var gasMix: GasMix?
     public var events: [DiveEvent]
     public var diveMode: DiveMode?
     public var ppo2Sensors: [Double]?
@@ -128,6 +132,7 @@ public struct DiveSample: Sendable, Hashable {
         decoCeiling: Double? = nil,
         decoStopDepth: Double? = nil,
         decoStopTime: TimeInterval? = nil,
+        gasMix: GasMix? = nil,
         events: [DiveEvent] = [],
         diveMode: DiveMode? = nil,
         ppo2Sensors: [Double]? = nil,
@@ -145,12 +150,20 @@ public struct DiveSample: Sendable, Hashable {
         self.decoCeiling = decoCeiling
         self.decoStopDepth = decoStopDepth
         self.decoStopTime = decoStopTime
+        self.gasMix = gasMix
         self.events = events
         self.diveMode = diveMode
         self.ppo2Sensors = ppo2Sensors
         self.isExternalPPO2 = isExternalPPO2
         self.tts = tts
     }
+}
+
+/// Format of the dive log raw data, used to determine which parser to use
+public enum DiveLogFormat: String, Sendable, Hashable, Codable {
+    case shearwater  // Shearwater Petrel Native Format (binary)
+    case yaml  // YAML simulated device format
+    case generic  // Generic/unknown format
 }
 
 public struct DiveLog: Sendable, Hashable, Identifiable {
@@ -171,6 +184,7 @@ public struct DiveLog: Sendable, Hashable, Identifiable {
     public var diveMode: DiveMode?
     public var waterDensity: Double?
     public var timeZoneOffset: TimeInterval?
+    public var format: DiveLogFormat
 
     public var rawData: Data?
 
@@ -192,7 +206,8 @@ public struct DiveLog: Sendable, Hashable, Identifiable {
         waterDensity: Double? = nil,
         timeZoneOffset: TimeInterval? = nil,
         fingerprint: String? = nil,
-        rawData: Data? = nil
+        rawData: Data? = nil,
+        format: DiveLogFormat = .shearwater
     ) {
         self.id = id
         self.startTime = startTime
@@ -212,5 +227,6 @@ public struct DiveLog: Sendable, Hashable, Identifiable {
         self.timeZoneOffset = timeZoneOffset
         self.fingerprint = fingerprint
         self.rawData = rawData
+        self.format = format
     }
 }

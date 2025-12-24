@@ -1,0 +1,549 @@
+# Sample Dive Logs for YAML Simulated Device
+# This file contains 5 dive logs with rich metadata for testing
+# Logs 4 and 5 overlap (start times 3 minutes apart, both are ~45 min dives)
+
+version: 1
+
+dives:
+  # Dive 1: Deep CCR dive in Palau
+  - id: "yaml-dive-001"
+    fingerprint: "YAML001A2B3C4D5E"
+    startTime: "2024-12-15T09:30:00+09:00"
+    durationSeconds: 3600  # 60 min
+    maxDepthMeters: 45.2
+    averageDepthMeters: 28.5
+    waterTemperatureCelsius: 27.5
+    surfacePressureBar: 1.013
+    diveMode: "ccr"
+    waterDensity: 1025.0
+    decoModel: "Buhlmann ZHL-16C"
+    gradientFactorLow: 30
+    gradientFactorHigh: 70
+    timeZoneOffsetSeconds: 32400  # +9 hours
+    
+    gasMixes:
+      - o2: 0.21
+        he: 0.35
+        isDiluent: true
+      - o2: 0.50
+        he: 0.0
+        isDiluent: false
+      - o2: 1.00
+        he: 0.0
+        isDiluent: false
+    
+    tanks:
+      - name: "Diluent"
+        serialNumber: "AI-001234"
+        volumeLiters: 3.0
+        workingPressureBar: 200.0
+        startPressureBar: 200.0
+        endPressureBar: 120.0
+        usage: "diluent"
+      - name: "O2"
+        serialNumber: "AI-001235"
+        volumeLiters: 3.0
+        workingPressureBar: 200.0
+        startPressureBar: 200.0
+        endPressureBar: 180.0
+        usage: "oxygen"
+    
+    samples:
+      - timeOffsetSeconds: 0
+        depthMeters: 0.0
+        o2: 0.21
+        he: 0.35
+        temperatureCelsius: 28.0
+        tankPressureBar: 200.0
+        ppo2: 0.21
+        setpoint: 0.7
+        cns: 0.0
+        ndlSeconds: 5940
+      - timeOffsetSeconds: 360
+        depthMeters: 15.0
+        temperatureCelsius: 27.8
+        tankPressureBar: 190.0
+        ppo2: 1.1
+        setpoint: 1.1
+        cns: 0.02
+        ndlSeconds: 5940
+      - timeOffsetSeconds: 720
+        depthMeters: 30.0
+        temperatureCelsius: 27.5
+        tankPressureBar: 180.0
+        ppo2: 1.2
+        setpoint: 1.2
+        cns: 0.05
+        ndlSeconds: 4200
+      - timeOffsetSeconds: 1080
+        depthMeters: 45.0
+        temperatureCelsius: 27.0
+        tankPressureBar: 170.0
+        ppo2: 1.3
+        setpoint: 1.3
+        cns: 0.10
+        decoCeilingMeters: 3.0
+        decoStopDepthMeters: 6.0
+        decoStopTimeSeconds: 60
+        ttsSeconds: 900
+      - timeOffsetSeconds: 1440
+        depthMeters: 45.2
+        temperatureCelsius: 27.0
+        tankPressureBar: 160.0
+        ppo2: 1.3
+        setpoint: 1.3
+        cns: 0.15
+        decoCeilingMeters: 6.0
+        decoStopDepthMeters: 6.0
+        decoStopTimeSeconds: 120
+        ttsSeconds: 1200
+      - timeOffsetSeconds: 1800
+        depthMeters: 40.0
+        temperatureCelsius: 27.2
+        tankPressureBar: 150.0
+        ppo2: 1.3
+        setpoint: 1.3
+        cns: 0.20
+        decoCeilingMeters: 6.0
+      - timeOffsetSeconds: 2160
+        depthMeters: 30.0
+        temperatureCelsius: 27.5
+        tankPressureBar: 145.0
+        ppo2: 1.2
+        setpoint: 1.2
+        cns: 0.22
+        decoCeilingMeters: 6.0
+      - timeOffsetSeconds: 2520
+        depthMeters: 15.0
+        temperatureCelsius: 27.8
+        tankPressureBar: 140.0
+        ppo2: 1.1
+        setpoint: 1.1
+        cns: 0.23
+        decoCeilingMeters: 3.0
+      - timeOffsetSeconds: 3000
+        depthMeters: 6.0
+        temperatureCelsius: 28.0
+        tankPressureBar: 135.0
+        ppo2: 1.0
+        setpoint: 1.0
+        cns: 0.24
+        decoCeilingMeters: 0.0
+      - timeOffsetSeconds: 3600
+        depthMeters: 0.0
+        temperatureCelsius: 28.2
+        tankPressureBar: 120.0
+        ppo2: 0.21
+        cns: 0.25
+
+  # Dive 2: Recreational OC dive in Cozumel
+  - id: "yaml-dive-002"
+    fingerprint: "YAML002F5E4D3C2B"
+    startTime: "2024-12-10T14:00:00-06:00"
+    durationSeconds: 2700  # 45 min
+    maxDepthMeters: 24.8
+    averageDepthMeters: 15.5
+    waterTemperatureCelsius: 26.0
+    surfacePressureBar: 1.010
+    diveMode: "ocRec"
+    waterDensity: 1025.0
+    decoModel: "Buhlmann ZHL-16C"
+    gradientFactorLow: 40
+    gradientFactorHigh: 85
+    timeZoneOffsetSeconds: -21600  # -6 hours
+    
+    gasMixes:
+      - o2: 0.32
+        he: 0.0
+        isDiluent: false
+    
+    tanks:
+      - name: "Main"
+        serialNumber: "AI-002001"
+        volumeLiters: 12.0
+        workingPressureBar: 232.0
+        startPressureBar: 220.0
+        endPressureBar: 60.0
+        usage: "unknown"
+    
+    samples:
+      - timeOffsetSeconds: 0
+        depthMeters: 0.0
+        o2: 0.32
+        he: 0.0
+        temperatureCelsius: 26.5
+        tankPressureBar: 220.0
+        ppo2: 0.32
+        cns: 0.0
+        ndlSeconds: 5940
+      - timeOffsetSeconds: 270
+        depthMeters: 10.0
+        temperatureCelsius: 26.3
+        tankPressureBar: 200.0
+        ppo2: 0.64
+        cns: 0.01
+        ndlSeconds: 5940
+      - timeOffsetSeconds: 540
+        depthMeters: 20.0
+        temperatureCelsius: 26.0
+        tankPressureBar: 180.0
+        ppo2: 0.96
+        cns: 0.03
+        ndlSeconds: 3600
+      - timeOffsetSeconds: 810
+        depthMeters: 24.8
+        temperatureCelsius: 25.8
+        tankPressureBar: 160.0
+        ppo2: 1.11
+        cns: 0.05
+        ndlSeconds: 2400
+      - timeOffsetSeconds: 1350
+        depthMeters: 22.0
+        temperatureCelsius: 25.9
+        tankPressureBar: 130.0
+        ppo2: 1.02
+        cns: 0.08
+        ndlSeconds: 1800
+      - timeOffsetSeconds: 1800
+        depthMeters: 18.0
+        temperatureCelsius: 26.0
+        tankPressureBar: 100.0
+        ppo2: 0.89
+        cns: 0.10
+        ndlSeconds: 2400
+      - timeOffsetSeconds: 2160
+        depthMeters: 12.0
+        temperatureCelsius: 26.2
+        tankPressureBar: 80.0
+        ppo2: 0.70
+        cns: 0.11
+        ndlSeconds: 5940
+      - timeOffsetSeconds: 2430
+        depthMeters: 5.0
+        temperatureCelsius: 26.4
+        tankPressureBar: 70.0
+        ppo2: 0.48
+        cns: 0.12
+        ndlSeconds: 5940
+      - timeOffsetSeconds: 2700
+        depthMeters: 0.0
+        temperatureCelsius: 26.5
+        tankPressureBar: 60.0
+        ppo2: 0.32
+        cns: 0.12
+
+  # Dive 3: Tech OC dive in Dahab, Egypt
+  - id: "yaml-dive-003"
+    fingerprint: "YAML003C4D5E6F7A"
+    startTime: "2024-11-20T08:15:00+02:00"
+    durationSeconds: 4500  # 75 min
+    maxDepthMeters: 55.0
+    averageDepthMeters: 32.0
+    waterTemperatureCelsius: 24.0
+    surfacePressureBar: 1.015
+    diveMode: "ocTec"
+    waterDensity: 1029.0
+    decoModel: "VPM-B"
+    gradientFactorLow: 30
+    gradientFactorHigh: 85
+    timeZoneOffsetSeconds: 7200  # +2 hours
+    
+    gasMixes:
+      - o2: 0.21
+        he: 0.35
+        isDiluent: false
+      - o2: 0.50
+        he: 0.0
+        isDiluent: false
+      - o2: 1.00
+        he: 0.0
+        isDiluent: false
+    
+    tanks:
+      - name: "Back Gas"
+        serialNumber: "AI-003001"
+        volumeLiters: 24.0
+        workingPressureBar: 232.0
+        startPressureBar: 220.0
+        endPressureBar: 50.0
+        usage: "unknown"
+      - name: "Deco 50"
+        serialNumber: "AI-003002"
+        volumeLiters: 11.0
+        workingPressureBar: 232.0
+        startPressureBar: 200.0
+        endPressureBar: 100.0
+        usage: "unknown"
+      - name: "O2"
+        serialNumber: "AI-003003"
+        volumeLiters: 7.0
+        workingPressureBar: 232.0
+        startPressureBar: 200.0
+        endPressureBar: 120.0
+        usage: "oxygen"
+    
+    samples:
+      - timeOffsetSeconds: 0
+        depthMeters: 0.0
+        o2: 0.21
+        he: 0.35
+        temperatureCelsius: 25.0
+        tankPressureBar: 220.0
+        ppo2: 0.21
+        cns: 0.0
+        ndlSeconds: 5940
+      - timeOffsetSeconds: 450
+        depthMeters: 25.0
+        temperatureCelsius: 24.5
+        tankPressureBar: 200.0
+        ppo2: 0.73
+        cns: 0.02
+        ndlSeconds: 3000
+      - timeOffsetSeconds: 900
+        depthMeters: 55.0
+        temperatureCelsius: 23.5
+        tankPressureBar: 170.0
+        ppo2: 1.36
+        cns: 0.08
+        decoCeilingMeters: 9.0
+        ttsSeconds: 2400
+      - timeOffsetSeconds: 1350
+        depthMeters: 55.0
+        temperatureCelsius: 23.5
+        tankPressureBar: 140.0
+        ppo2: 1.36
+        cns: 0.15
+        decoCeilingMeters: 12.0
+        ttsSeconds: 3000
+      - timeOffsetSeconds: 1800
+        depthMeters: 40.0
+        temperatureCelsius: 24.0
+        tankPressureBar: 110.0
+        ppo2: 1.05
+        cns: 0.20
+        decoCeilingMeters: 12.0
+      - timeOffsetSeconds: 2250
+        depthMeters: 21.0
+        o2: 0.50
+        he: 0.0
+        temperatureCelsius: 24.3
+        tankPressureBar: 90.0
+        ppo2: 1.55
+        cns: 0.28
+        decoCeilingMeters: 9.0
+        events:
+          - type: "gasChange"
+            o2: 0.50
+            he: 0.0
+      - timeOffsetSeconds: 2700
+        depthMeters: 12.0
+        temperatureCelsius: 24.5
+        tankPressureBar: 80.0
+        ppo2: 1.10
+        cns: 0.35
+        decoCeilingMeters: 6.0
+      - timeOffsetSeconds: 3600
+        depthMeters: 6.0
+        o2: 1.0
+        he: 0.0
+        temperatureCelsius: 24.8
+        tankPressureBar: 70.0
+        ppo2: 1.60
+        cns: 0.50
+        decoCeilingMeters: 0.0
+        events:
+          - type: "gasChange"
+            o2: 1.0
+            he: 0.0
+      - timeOffsetSeconds: 4200
+        depthMeters: 3.0
+        temperatureCelsius: 25.0
+        tankPressureBar: 130.0
+        ppo2: 1.30
+        cns: 0.60
+        ndlSeconds: 5940
+      - timeOffsetSeconds: 4500
+        depthMeters: 0.0
+        temperatureCelsius: 25.0
+        tankPressureBar: 120.0
+        ppo2: 1.0
+        cns: 0.62
+
+  # Dive 4: First of overlapping pair - Morning reef dive
+  # Starts at 10:00, lasts 45 min (ends at 10:45)
+  - id: "yaml-dive-004"
+    fingerprint: "YAML004OVERLAP01"
+    startTime: "2024-12-01T10:00:00+08:00"
+    durationSeconds: 2700  # 45 min
+    maxDepthMeters: 18.0
+    averageDepthMeters: 12.0
+    waterTemperatureCelsius: 28.0
+    surfacePressureBar: 1.013
+    diveMode: "ocRec"
+    waterDensity: 1025.0
+    decoModel: "Buhlmann ZHL-16C"
+    gradientFactorLow: 40
+    gradientFactorHigh: 85
+    timeZoneOffsetSeconds: 28800  # +8 hours
+    
+    gasMixes:
+      - o2: 0.21
+        he: 0.0
+        isDiluent: false
+    
+    tanks:
+      - name: "Main"
+        serialNumber: "AI-004001"
+        volumeLiters: 12.0
+        workingPressureBar: 232.0
+        startPressureBar: 200.0
+        endPressureBar: 70.0
+        usage: "unknown"
+    
+    samples:
+      - timeOffsetSeconds: 0
+        depthMeters: 0.0
+        o2: 0.21
+        he: 0.0
+        temperatureCelsius: 28.5
+        tankPressureBar: 200.0
+        ppo2: 0.21
+        cns: 0.0
+        ndlSeconds: 5940
+      - timeOffsetSeconds: 270
+        depthMeters: 8.0
+        temperatureCelsius: 28.2
+        tankPressureBar: 190.0
+        ppo2: 0.38
+        ndlSeconds: 5940
+      - timeOffsetSeconds: 540
+        depthMeters: 15.0
+        temperatureCelsius: 28.0
+        tankPressureBar: 175.0
+        ppo2: 0.52
+        ndlSeconds: 5940
+      - timeOffsetSeconds: 900
+        depthMeters: 18.0
+        temperatureCelsius: 27.8
+        tankPressureBar: 155.0
+        ppo2: 0.59
+        ndlSeconds: 3600
+      - timeOffsetSeconds: 1350
+        depthMeters: 16.0
+        temperatureCelsius: 27.9
+        tankPressureBar: 130.0
+        ppo2: 0.55
+        ndlSeconds: 4200
+      - timeOffsetSeconds: 1800
+        depthMeters: 14.0
+        temperatureCelsius: 28.0
+        tankPressureBar: 110.0
+        ppo2: 0.50
+        ndlSeconds: 5400
+      - timeOffsetSeconds: 2100
+        depthMeters: 10.0
+        temperatureCelsius: 28.2
+        tankPressureBar: 95.0
+        ppo2: 0.42
+        ndlSeconds: 5940
+      - timeOffsetSeconds: 2400
+        depthMeters: 5.0
+        temperatureCelsius: 28.4
+        tankPressureBar: 80.0
+        ppo2: 0.32
+        ndlSeconds: 5940
+      - timeOffsetSeconds: 2700
+        depthMeters: 0.0
+        temperatureCelsius: 28.5
+        tankPressureBar: 70.0
+        ppo2: 0.21
+
+  # Dive 5: Second of overlapping pair - Same reef, second computer
+  # Starts at 10:03 (3 min later), lasts 42 min (ends at 10:45)
+  # This simulates two computers on the same dive with slightly different start times
+  - id: "yaml-dive-005"
+    fingerprint: "YAML005OVERLAP02"
+    startTime: "2024-12-01T10:03:00+08:00"  # 3 minutes after dive 4
+    durationSeconds: 2520  # 42 min
+    maxDepthMeters: 17.8
+    averageDepthMeters: 11.8
+    waterTemperatureCelsius: 28.1
+    surfacePressureBar: 1.013
+    diveMode: "ocRec"
+    waterDensity: 1025.0
+    decoModel: "Buhlmann ZHL-16C"
+    gradientFactorLow: 40
+    gradientFactorHigh: 85
+    timeZoneOffsetSeconds: 28800  # +8 hours
+    
+    gasMixes:
+      - o2: 0.21
+        he: 0.0
+        isDiluent: false
+    
+    tanks:
+      - name: "Main"
+        serialNumber: "AI-005001"
+        volumeLiters: 11.0
+        workingPressureBar: 232.0
+        startPressureBar: 195.0
+        endPressureBar: 65.0
+        usage: "unknown"
+    
+    samples:
+      - timeOffsetSeconds: 0
+        depthMeters: 0.0
+        o2: 0.21
+        he: 0.0
+        temperatureCelsius: 28.5
+        tankPressureBar: 195.0
+        ppo2: 0.21
+        cns: 0.0
+        ndlSeconds: 5940
+      - timeOffsetSeconds: 252
+        depthMeters: 7.5
+        temperatureCelsius: 28.3
+        tankPressureBar: 185.0
+        ppo2: 0.37
+        ndlSeconds: 5940
+      - timeOffsetSeconds: 504
+        depthMeters: 14.5
+        temperatureCelsius: 28.1
+        tankPressureBar: 170.0
+        ppo2: 0.51
+        ndlSeconds: 5940
+      - timeOffsetSeconds: 840
+        depthMeters: 17.8
+        temperatureCelsius: 27.9
+        tankPressureBar: 150.0
+        ppo2: 0.58
+        ndlSeconds: 3720
+      - timeOffsetSeconds: 1260
+        depthMeters: 15.5
+        temperatureCelsius: 28.0
+        tankPressureBar: 125.0
+        ppo2: 0.54
+        ndlSeconds: 4320
+      - timeOffsetSeconds: 1680
+        depthMeters: 13.5
+        temperatureCelsius: 28.1
+        tankPressureBar: 105.0
+        ppo2: 0.49
+        ndlSeconds: 5500
+      - timeOffsetSeconds: 1932
+        depthMeters: 9.5
+        temperatureCelsius: 28.3
+        tankPressureBar: 90.0
+        ppo2: 0.41
+        ndlSeconds: 5940
+      - timeOffsetSeconds: 2268
+        depthMeters: 4.5
+        temperatureCelsius: 28.4
+        tankPressureBar: 75.0
+        ppo2: 0.30
+        ndlSeconds: 5940
+      - timeOffsetSeconds: 2520
+        depthMeters: 0.0
+        temperatureCelsius: 28.5
+        tankPressureBar: 65.0
+        ppo2: 0.21

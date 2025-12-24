@@ -18,9 +18,13 @@ let package = Package(
             targets: ["ShearwaterCLI"]
         ),
     ],
+    dependencies: [
+        .package(url: "https://github.com/jpsim/Yams.git", from: "6.0.1")
+    ],
     targets: [
         .target(
             name: "DiveComputerSwift",
+            dependencies: ["Yams"],
             resources: [
                 .process("Resources")
             ]

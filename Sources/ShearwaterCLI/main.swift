@@ -255,7 +255,7 @@ func main() async {
                 for (i, gas) in parsed.gasMixes.enumerated() {
                     let diluentStr = gas.isDiluent ? " (Diluent)" : ""
                     print(
-                        "     [\(i)] O2: \(Int(gas.oxygenFraction * 100))% He: \(Int(gas.heliumFraction * 100))%\(diluentStr)"
+                        "     [\(i)] O2: \(Int(gas.o2 * 100))% He: \(Int(gas.he * 100))%\(diluentStr)"
                     )
                 }
                 print("   Tanks:      \(parsed.tanks.count)")
@@ -293,11 +293,11 @@ func main() async {
                             switch event {
                             case .gasChange(let mix):
                                 print(
-                                    "     \(timeStr): Gas Change -> O2:\(Int(mix.oxygenFraction * 100))% He:\(Int(mix.heliumFraction * 100))%"
+                                    "     \(timeStr): Gas Change -> O2:\(Int(mix.o2 * 100))% He:\(Int(mix.he * 100))%"
                                 )
                             case .diluentChange(let mix):
                                 print(
-                                    "     \(timeStr): Diluent Switch -> O2:\(Int(mix.oxygenFraction * 100))% He:\(Int(mix.heliumFraction * 100))%"
+                                    "     \(timeStr): Diluent Switch -> O2:\(Int(mix.o2 * 100))% He:\(Int(mix.he * 100))%"
                                 )
                             case .warning(let msg):
                                 print("     \(timeStr): Warning: \(msg)")

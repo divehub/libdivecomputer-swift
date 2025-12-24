@@ -283,7 +283,8 @@ public final class ShearwaterSession: @unchecked Sendable, DiveComputerDriverSes
                     waterDensity: parsed.waterDensity,
                     timeZoneOffset: parsed.timeZoneOffset,
                     fingerprint: candidate.fingerprint,
-                    rawData: diveData
+                    rawData: diveData,
+                    format: .shearwater
                 )
                 dives.append(log)
             } else {
@@ -294,7 +295,8 @@ public final class ShearwaterSession: @unchecked Sendable, DiveComputerDriverSes
                     samples: [],
                     gasMixes: [],
                     fingerprint: candidate.fingerprint,
-                    rawData: diveData
+                    rawData: diveData,
+                    format: .shearwater
                 )
                 dives.append(log)
             }

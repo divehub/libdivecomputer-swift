@@ -34,14 +34,15 @@ final class SimulatedDeviceTests: XCTestCase {
         XCTAssertEqual(info.serialNumber, "SIM-123456")
         
         // 5. Download Logs (All)
-        let allLogs = try await session.downloadDiveLogs(progress: nil)
+        let manifest = try await session.downloadManifest()
+        let allLogs = try await session.downloadDives(candidates: manifest, progress: nil)
         XCTAssertGreaterThan(allLogs.count, 0, "Should have bundled logs")
         
         // 6. Test Fingerprint Filtering
         // Assume logs are [Latest, ..., Oldest] (Desc by Date)
         // Let's verify sort first
         let sortedLogs = allLogs.sorted { $0.startTime > $1.startTime }
-        XCTAssertEqual(allLogs.map(\.startTime), sortedLogs.map(\.startTime), "Logs should be returned sorted by date descending")
+        XCTAssertEqual(allLogs.map { $0.startTime }, sortedLogs.map { $0.startTime }, "Logs should be returned sorted by date descending")
         
         if allLogs.count >= 2 {
             let limitLog = allLogs[1] // The second log (older than first)
@@ -54,7 +55,15 @@ final class SimulatedDeviceTests: XCTestCase {
             // Logic: iterate Newest->Oldest. If FP matches, STOP. Return accumulated.
             // So if match is at index 1, result should be [index 0].
             
-            let newLogs = try await session.downloadDiveLogs(fingerprint: fp, progress: nil)
+            var filtered: [DiveLogCandidate] = []
+            for candidate in manifest {
+                if candidate.fingerprint == fp {
+                    break
+                }
+                filtered.append(candidate)
+            }
+
+            let newLogs = try await session.downloadDives(candidates: filtered, progress: nil)
             XCTAssertEqual(newLogs.count, 1, "Should return only 1 log (the newer one)")
             XCTAssertEqual(newLogs.first?.startTime, allLogs.first?.startTime, "The returned log should be the newest one")
         }
