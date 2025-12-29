@@ -19,12 +19,16 @@ let package = Package(
         ),
     ],
     dependencies: [
-        .package(url: "https://github.com/jpsim/Yams.git", from: "6.0.1")
+        .package(url: "https://github.com/jpsim/Yams.git", from: "6.0.1"),
+        .package(url: "https://github.com/garmin/fit-objective-c-sdk.git", from: "21.171.0")
     ],
     targets: [
         .target(
             name: "DiveComputerSwift",
-            dependencies: ["Yams"],
+            dependencies: [
+                "Yams",
+                .product(name: "FIT", package: "fit-objective-c-sdk"),
+            ],
             resources: [
                 .process("Resources")
             ]
@@ -35,7 +39,10 @@ let package = Package(
         ),
         .testTarget(
             name: "DiveComputerSwiftTests",
-            dependencies: ["DiveComputerSwift"]
+            dependencies: ["DiveComputerSwift"],
+            resources: [
+                .process("Resources")
+            ]
         ),
     ]
 )

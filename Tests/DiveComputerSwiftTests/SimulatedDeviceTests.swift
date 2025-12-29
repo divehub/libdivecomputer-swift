@@ -41,8 +41,8 @@ final class SimulatedDeviceTests: XCTestCase {
         // 6. Test Fingerprint Filtering
         // Assume logs are [Latest, ..., Oldest] (Desc by Date)
         // Let's verify sort first
-        let sortedLogs = allLogs.sorted { $0.startTime > $1.startTime }
-        XCTAssertEqual(allLogs.map { $0.startTime }, sortedLogs.map { $0.startTime }, "Logs should be returned sorted by date descending")
+        let sortedLogs = allLogs.sorted { $0.startTimeUTC > $1.startTimeUTC }
+        XCTAssertEqual(allLogs.map { $0.startTimeUTC }, sortedLogs.map { $0.startTimeUTC }, "Logs should be returned sorted by date descending")
         
         if allLogs.count >= 2 {
             let limitLog = allLogs[1] // The second log (older than first)
@@ -65,7 +65,7 @@ final class SimulatedDeviceTests: XCTestCase {
 
             let newLogs = try await session.downloadDives(candidates: filtered, progress: nil)
             XCTAssertEqual(newLogs.count, 1, "Should return only 1 log (the newer one)")
-            XCTAssertEqual(newLogs.first?.startTime, allLogs.first?.startTime, "The returned log should be the newest one")
+            XCTAssertEqual(newLogs.first?.startTimeUTC, allLogs.first?.startTimeUTC, "The returned log should be the newest one")
         }
         
         await session.close()

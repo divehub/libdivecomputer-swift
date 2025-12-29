@@ -161,7 +161,7 @@ public final class SimulatedDriverSession: DiveComputerDriverSession {
         // Load bundled logs once to ensure stable indices
         let (logs, _) = SimulatedDriverSession.loadBundledLogsWithSizes()
         // Sorted Newest to Oldest (by Start Time Descending)
-        self.bundledLogs = logs.sorted { $0.startTime > $1.startTime }
+        self.bundledLogs = logs.sorted { $0.startTimeUTC > $1.startTimeUTC }
     }
 
     public func readDeviceInfo() async throws -> DiveComputerInfo {
@@ -185,7 +185,7 @@ public final class SimulatedDriverSession: DiveComputerDriverSession {
             candidates.append(
                 DiveLogCandidate(
                     id: index + 1,  // 1-based index usually
-                    timestamp: log.startTime,
+                    timestamp: log.startTimeUTC,
                     fingerprint: log.fingerprint ?? "UNKNOWN-\(index)",
                     metadata: ["index": String(index)]
                 ))
@@ -274,7 +274,8 @@ public final class SimulatedDriverSession: DiveComputerDriverSession {
                 let data = try Data(contentsOf: url)
                 if let parsed = ShearwaterLogParser.parse(data: data) {
                     let log = DiveLog(
-                        startTime: parsed.startTime,
+                        startTimeUTC: parsed.startTimeUTC,
+                        startTimeLocal: parsed.startTimeLocal,
                         duration: parsed.duration,
                         maxDepthMeters: parsed.maxDepth,
                         averageDepthMeters: parsed.avgDepth,

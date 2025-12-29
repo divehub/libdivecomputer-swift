@@ -5,6 +5,21 @@ import Foundation
     import CoreBluetooth
 #endif
 
+private let utcDateFormatter: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+    formatter.timeZone = TimeZone(secondsFromGMT: 0)
+    return formatter
+}()
+
+private func formatWallClockDate(_ date: Date) -> String {
+    utcDateFormatter.string(from: date)
+}
+
+private func formatUTCDate(_ date: Date) -> String {
+    utcDateFormatter.string(from: date)
+}
+
 #if canImport(CoreBluetooth)
     @MainActor
     class ShearwaterCLI: NSObject {
@@ -161,7 +176,8 @@ import Foundation
                             print("   ⚠️ No raw data for dive #\(index + 1)")
                         }
                         print("  Dive #\(index + 1):")
-                        print("    Date: \(dive.startTime)")
+                        print("    Local (wall-clock): \(formatWallClockDate(dive.startTimeLocal))")
+                        print("    UTC: \(formatUTCDate(dive.startTimeUTC))")
                         print("    Duration: \(dive.duration)")
                         print("    Max Depth: \(dive.maxDepthMeters)m")
                         if let avgDepth = dive.averageDepthMeters {
@@ -242,7 +258,8 @@ func main() async {
                         "   Fingerprint: \(fp.map { String(format: "%02X", $0) }.joined())"
                     )
                 }
-                print("   Start Time: \(parsed.startTime)")
+                print("   Start Time (Local): \(formatWallClockDate(parsed.startTimeLocal))")
+                print("   Start Time (UTC):   \(formatUTCDate(parsed.startTimeUTC))")
                 print("   Duration:   \(parsed.duration)")
                 print("   Max Depth:  \(parsed.maxDepth)m")
                 print("   Avg Depth:  \(parsed.avgDepth)m")
@@ -260,8 +277,13 @@ func main() async {
                 }
                 print("   Tanks:      \(parsed.tanks.count)")
                 for (i, tank) in parsed.tanks.enumerated() {
+                    let startPressure =
+                        tank.startPressureBar.map { String(format: "%.1f bar", $0) } ?? "n/a"
+                    let endPressure =
+                        tank.endPressureBar.map { String(format: "%.1f bar", $0) } ?? "n/a"
+                    let recordCount = tank.pressureRecords.count
                     print(
-                        "     [\(i)] \(tank.name ?? "Unknown") (SN: \(tank.serialNumber ?? "N/A"))"
+                        "     [\(i)] \(tank.name ?? "Unknown") (Sensor: \(tank.sensorId ?? "N/A")) Start: \(startPressure) End: \(endPressure) Records: \(recordCount)"
                     )
                 }
                 if let diveMode = parsed.diveMode {
@@ -281,7 +303,7 @@ func main() async {
                 let allEvents = parsed.samples.compactMap {
                     sample -> (TimeInterval, [DiveEvent])? in
                     if sample.events.isEmpty { return nil }
-                    return (sample.timestamp.timeIntervalSince(parsed.startTime), sample.events)
+                    return (sample.timestamp.timeIntervalSince(parsed.startTimeUTC), sample.events)
                 }
 
                 if !allEvents.isEmpty {
@@ -313,15 +335,24 @@ func main() async {
                 if !parsed.samples.isEmpty {
                     print()
                     print("   Sample Data (First 20):")
+                    let pressureRecords =
+                        parsed.tanks.first(where: { !$0.pressureRecords.isEmpty })?.pressureRecords
+                        ?? []
+                    let pressureLookup: [Date: Double] = pressureRecords.reduce(into: [:]) {
+                        result, record in
+                        result[record.timestamp] = record.pressureBar
+                    }
                     for (i, sample) in parsed.samples.prefix(20).enumerated() {
-                        let relativeTime = sample.timestamp.timeIntervalSince(parsed.startTime)
+                        let relativeTime = sample.timestamp.timeIntervalSince(parsed.startTimeUTC)
                         let timeString = String(format: "T+%0.0fs", relativeTime)
                         let depthString = String(format: "%0.1fm", sample.depthMeters)
                         let tempString =
                             sample.temperatureCelsius.map { String(format: "%0.1f°C", $0) }
                             ?? "-"
                         let pressureString =
-                            sample.tankPressureBar.map { String(format: "P:%0.1fbar", $0) }
+                            pressureLookup[sample.timestamp].map {
+                                String(format: "P:%0.1fbar", $0)
+                            }
                             ?? ""
                         let modeString = sample.diveMode.map { "Mode:\($0.rawValue)" } ?? ""
 

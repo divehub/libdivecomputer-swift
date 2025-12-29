@@ -6,7 +6,8 @@ import Foundation
 public struct ShearwaterLogParser {
 
     public struct ParsedDive: Sendable {
-        public let startTime: Date
+        public let startTimeUTC: Date
+        public let startTimeLocal: Date
         public let duration: Duration
         public let maxDepth: Double
         public let avgDepth: Double
@@ -19,7 +20,6 @@ public struct ShearwaterLogParser {
         public let gradientFactorHigh: Int?
         public let diveMode: DiveMode?
         public let waterDensity: Double?
-        public let timeZoneOffset: TimeInterval?
         public let fingerprint: Data?
     }
 
@@ -99,14 +99,39 @@ public struct ShearwaterLogParser {
         let headers = parseHeaders(
             openingRecords: openingRecords, closingRecords: closingRecords, finalRecord: finalRecord
         )
-        guard let startTime = headers.startTime else { return nil }
+        guard let startTimeLocal = headers.startTime else { return nil }
+        let startTimeUTC = startTimeLocal.addingTimeInterval(-(headers.timeZoneOffset ?? 0))
 
         // 3. Parse Samples
-        let samples = parseSamples(
+        let sampleResult = parseSamples(
             rawSamples: rawSamples,
-            startTime: startTime,
+            startTime: startTimeUTC,
             headers: headers
         )
+        let samples = sampleResult.samples
+        var tanks = headers.tanks
+        if !sampleResult.pressureRecords.isEmpty {
+            let startPressure = sampleResult.pressureRecords.first?.pressureBar
+            let endPressure = sampleResult.pressureRecords.last?.pressureBar
+            if tanks.isEmpty {
+                tanks = [
+                    DiveTank(
+                        name: "Tank 1",
+                        startPressureBar: startPressure,
+                        endPressureBar: endPressure,
+                        pressureRecords: sampleResult.pressureRecords
+                    )
+                ]
+            } else {
+                tanks[0].pressureRecords = sampleResult.pressureRecords
+                if tanks[0].startPressureBar == nil {
+                    tanks[0].startPressureBar = startPressure
+                }
+                if tanks[0].endPressureBar == nil {
+                    tanks[0].endPressureBar = endPressure
+                }
+            }
+        }
 
         guard !samples.isEmpty else { return nil }
 
@@ -120,20 +145,20 @@ public struct ShearwaterLogParser {
         let duration = headers.duration ?? calcDuration
 
         return ParsedDive(
-            startTime: startTime,
+            startTimeUTC: startTimeUTC,
+            startTimeLocal: startTimeLocal,
             duration: .seconds(duration),
             maxDepth: maxDepth,
             avgDepth: calcAvgDepth,
             surfacePressure: headers.surfacePressure,
             samples: samples,
             gasMixes: headers.gasMixes,
-            tanks: headers.tanks,
+            tanks: tanks,
             decoModel: headers.decoModel,
             gradientFactorLow: headers.gfLow,
             gradientFactorHigh: headers.gfHigh,
             diveMode: headers.diveMode,
             waterDensity: headers.waterDensity,
-            timeZoneOffset: headers.timeZoneOffset,
             fingerprint: headers.fingerprint
         )
     }
@@ -144,7 +169,8 @@ public struct ShearwaterLogParser {
         guard let parsed = parse(data: data) else { return nil }
 
         return DiveLog(
-            startTime: parsed.startTime,
+            startTimeUTC: parsed.startTimeUTC,
+            startTimeLocal: parsed.startTimeLocal,
             duration: parsed.duration,
             maxDepthMeters: parsed.maxDepth,
             averageDepthMeters: parsed.avgDepth,
@@ -158,7 +184,6 @@ public struct ShearwaterLogParser {
             gradientFactorHigh: parsed.gradientFactorHigh,
             diveMode: parsed.diveMode,
             waterDensity: parsed.waterDensity,
-            timeZoneOffset: parsed.timeZoneOffset,
             fingerprint: parsed.fingerprint.map { $0.map { String(format: "%02X", $0) }.joined() },
             rawData: data,
             format: .shearwater
@@ -423,7 +448,7 @@ public struct ShearwaterLogParser {
             guard let b1 = b1, let b2 = b2, let b3 = b3 else { return }
             let s = formatSerial(b1, b2, b3)
             if s != "000000" {
-                h.tanks.append(DiveTank(name: name, serialNumber: s, usage: .unknown))
+                h.tanks.append(DiveTank(name: name, sensorId: s))
             }
         }
 
@@ -441,12 +466,18 @@ public struct ShearwaterLogParser {
 
     // --- Phase 3: Sample Parsing ---
 
+    private struct SampleParseResult {
+        var samples: [DiveSample]
+        var pressureRecords: [DiveTank.PressureRecord]
+    }
+
     private static func parseSamples(
         rawSamples: [(TimeInterval, DataReader)],
         startTime: Date,
         headers: Headers
-    ) -> [DiveSample] {
+    ) -> SampleParseResult {
         var samples: [DiveSample] = []
+        var pressureRecords: [DiveTank.PressureRecord] = []
         var lastO2: UInt8 = 0
         var lastHe: UInt8 = 0
         var lastIsOC: Bool? = nil
@@ -566,12 +597,18 @@ public struct ShearwaterLogParser {
             }
             lastIsOC = isOC
 
+            let timestamp = startTime.addingTimeInterval(timeOffset)
+            if let pressureBar {
+                pressureRecords.append(
+                    DiveTank.PressureRecord(timestamp: timestamp, pressureBar: pressureBar)
+                )
+            }
+
             samples.append(
                 DiveSample(
-                    timestamp: startTime.addingTimeInterval(timeOffset),
+                    timestamp: timestamp,
                     depthMeters: depthMeters,
                     temperatureCelsius: tempCelsius,
-                    tankPressureBar: pressureBar,
                     ppo2: ppo2,
                     setpoint: setpoint,
                     cns: cns,
@@ -588,6 +625,6 @@ public struct ShearwaterLogParser {
                 ))
         }
 
-        return samples
+        return SampleParseResult(samples: samples, pressureRecords: pressureRecords)
     }
 }

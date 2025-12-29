@@ -7,7 +7,12 @@ final class ShearwaterLogParserTests: XCTestCase {
         let parsed = ShearwaterLogParser.parse(data: data)
 
         XCTAssertNotNil(parsed)
-        XCTAssertEqual(parsed?.timeZoneOffset, 480 * 60 + 3600)
+        let expectedOffset = TimeInterval(480 * 60 + 3600)
+        XCTAssertEqual(parsed?.startTimeLocal.timeIntervalSince1970, 1_700_000_000)
+        XCTAssertEqual(
+            parsed?.startTimeUTC.timeIntervalSince1970,
+            1_700_000_000 - expectedOffset
+        )
     }
 
     func testNonTericTimezoneOffsetNil() {
@@ -15,7 +20,7 @@ final class ShearwaterLogParserTests: XCTestCase {
         let parsed = ShearwaterLogParser.parse(data: data)
 
         XCTAssertNotNil(parsed)
-        XCTAssertNil(parsed?.timeZoneOffset)
+        XCTAssertEqual(parsed?.startTimeLocal, parsed?.startTimeUTC)
     }
 
     private func makeLogData(isTeric: Bool, logVersion: UInt8, utcOffsetMinutes: Int32, dstHours: UInt8) -> Data {

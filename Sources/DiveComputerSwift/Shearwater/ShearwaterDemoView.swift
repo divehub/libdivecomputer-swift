@@ -158,8 +158,7 @@ import Foundation
                             ForEach(viewModel.logs) { log in
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(
-                                        log.startTime.formatted(
-                                            date: .abbreviated, time: .shortened)
+                                        formatLocalDate(log.startTimeLocal)
                                     )
                                     .font(.headline)
                                     Text(
@@ -184,6 +183,14 @@ import Foundation
                 Spacer()
                 Text(value).foregroundColor(.secondary)
             }
+        }
+
+        private func formatLocalDate(_ date: Date) -> String {
+            let formatter = DateFormatter()
+            formatter.dateStyle = .medium
+            formatter.timeStyle = .short
+            formatter.timeZone = TimeZone(secondsFromGMT: 0)
+            return formatter.string(from: date)
         }
     }
 

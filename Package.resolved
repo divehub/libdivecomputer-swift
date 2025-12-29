@@ -1,6 +1,15 @@
 {
-  "originHash" : "23ba981f6c67c0b79218f3d964c3a8f581cc5f006e29db99451e02bec4b6619b",
+  "originHash" : "cadc6deae883dd366a6ca144146b19c8e74cc253cf8bfe0627e8ad59999b01e3",
   "pins" : [
+    {
+      "identity" : "fit-objective-c-sdk",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/garmin/fit-objective-c-sdk.git",
+      "state" : {
+        "revision" : "952b80da5b8c64c37d06afd74afbd426ac14368f",
+        "version" : "21.171.0"
+      }
+    },
     {
       "identity" : "yams",
       "kind" : "remoteSourceControl",

@@ -50,41 +50,38 @@ public enum DiveEvent: Sendable, Hashable {
     case unknown(code: Int)
 }
 
-public enum TankUsage: String, Sendable, Hashable, Codable {
-    case oxygen
-    case diluent
-    case sidemount
-    case unknown
-}
-
 public struct DiveTank: Sendable, Hashable {
+    public struct PressureRecord: Sendable, Hashable {
+        public var timestamp: Date
+        public var pressureBar: Double
+
+        public init(timestamp: Date, pressureBar: Double) {
+            self.timestamp = timestamp
+            self.pressureBar = pressureBar
+        }
+    }
+
     public var name: String?
-    public var serialNumber: String?
+    public var sensorId: String?
     public var volumeLiters: Double?
-    public var workingPressureBar: Double?
     public var startPressureBar: Double?
     public var endPressureBar: Double?
-    public var gasMix: GasMix?
-    public var usage: TankUsage
+    public var pressureRecords: [PressureRecord]
 
     public init(
         name: String? = nil,
-        serialNumber: String? = nil,
+        sensorId: String? = nil,
         volumeLiters: Double? = nil,
-        workingPressureBar: Double? = nil,
         startPressureBar: Double? = nil,
         endPressureBar: Double? = nil,
-        gasMix: GasMix? = nil,
-        usage: TankUsage = .unknown
+        pressureRecords: [PressureRecord] = []
     ) {
         self.name = name
-        self.serialNumber = serialNumber
+        self.sensorId = sensorId
         self.volumeLiters = volumeLiters
-        self.workingPressureBar = workingPressureBar
         self.startPressureBar = startPressureBar
         self.endPressureBar = endPressureBar
-        self.gasMix = gasMix
-        self.usage = usage
+        self.pressureRecords = pressureRecords
     }
 }
 
@@ -104,12 +101,11 @@ public struct DiveSample: Sendable, Hashable {
     public var timestamp: Date
     public var depthMeters: Double
     public var temperatureCelsius: Double?
-    public var tankPressureBar: Double?
     public var ppo2: Double?
     public var setpoint: Double?
     public var cns: Double?
     public var noDecompressionLimit: TimeInterval?
-    public var decoCeiling: Double?
+    public var decoCeiling: Double?  // not available on certain devices. They may use decoStopDepth
     public var decoStopDepth: Double?
     public var decoStopTime: TimeInterval?
     /// Active gas mix at this sample (fractions are 0.0...1.0).
@@ -117,14 +113,13 @@ public struct DiveSample: Sendable, Hashable {
     public var events: [DiveEvent]
     public var diveMode: DiveMode?
     public var ppo2Sensors: [Double]?
-    public var isExternalPPO2: Bool?
+    public var isExternalPPO2: Bool?  // uses external PPo2 sensors. Which usually means ppo2Sensors are available.
     public var tts: TimeInterval?
 
     public init(
         timestamp: Date,
         depthMeters: Double,
         temperatureCelsius: Double? = nil,
-        tankPressureBar: Double? = nil,
         ppo2: Double? = nil,
         setpoint: Double? = nil,
         cns: Double? = nil,
@@ -142,7 +137,6 @@ public struct DiveSample: Sendable, Hashable {
         self.timestamp = timestamp
         self.depthMeters = depthMeters
         self.temperatureCelsius = temperatureCelsius
-        self.tankPressureBar = tankPressureBar
         self.ppo2 = ppo2
         self.setpoint = setpoint
         self.cns = cns
@@ -163,12 +157,18 @@ public struct DiveSample: Sendable, Hashable {
 public enum DiveLogFormat: String, Sendable, Hashable, Codable {
     case shearwater  // Shearwater Petrel Native Format (binary)
     case yaml  // YAML simulated device format
+    case garmin_fit  // Garmin FIT dive log format
     case generic  // Generic/unknown format
 }
 
 public struct DiveLog: Sendable, Hashable, Identifiable {
     public var id: UUID
-    public var startTime: Date
+    public var startTimeUTC: Date
+    public var startTimeLocal: Date
+    public var startPositionLat: Double?
+    public var startPositionLong: Double?
+    public var endPositionLat: Double?
+    public var endPositionLong: Double?
     public var duration: Duration
     public var maxDepthMeters: Double
     public var averageDepthMeters: Double?
@@ -183,14 +183,18 @@ public struct DiveLog: Sendable, Hashable, Identifiable {
     public var gradientFactorHigh: Int?
     public var diveMode: DiveMode?
     public var waterDensity: Double?
-    public var timeZoneOffset: TimeInterval?
     public var format: DiveLogFormat
 
     public var rawData: Data?
 
     public init(
         id: UUID = UUID(),
-        startTime: Date,
+        startTimeUTC: Date,
+        startTimeLocal: Date? = nil,
+        startPositionLat: Double? = nil,
+        startPositionLong: Double? = nil,
+        endPositionLat: Double? = nil,
+        endPositionLong: Double? = nil,
         duration: Duration,
         maxDepthMeters: Double,
         averageDepthMeters: Double? = nil,
@@ -204,13 +208,17 @@ public struct DiveLog: Sendable, Hashable, Identifiable {
         gradientFactorHigh: Int? = nil,
         diveMode: DiveMode? = nil,
         waterDensity: Double? = nil,
-        timeZoneOffset: TimeInterval? = nil,
         fingerprint: String? = nil,
         rawData: Data? = nil,
         format: DiveLogFormat = .shearwater
     ) {
         self.id = id
-        self.startTime = startTime
+        self.startTimeUTC = startTimeUTC
+        self.startTimeLocal = startTimeLocal ?? startTimeUTC
+        self.startPositionLat = startPositionLat
+        self.startPositionLong = startPositionLong
+        self.endPositionLat = endPositionLat
+        self.endPositionLong = endPositionLong
         self.duration = duration
         self.maxDepthMeters = maxDepthMeters
         self.averageDepthMeters = averageDepthMeters
@@ -224,7 +232,6 @@ public struct DiveLog: Sendable, Hashable, Identifiable {
         self.gradientFactorHigh = gradientFactorHigh
         self.diveMode = diveMode
         self.waterDensity = waterDensity
-        self.timeZoneOffset = timeZoneOffset
         self.fingerprint = fingerprint
         self.rawData = rawData
         self.format = format

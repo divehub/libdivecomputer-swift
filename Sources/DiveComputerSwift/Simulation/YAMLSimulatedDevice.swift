@@ -49,10 +49,10 @@ public final class YAMLSimulatedDriverSession: DiveComputerDriverSession {
         print("DEBUG: YAMLSimulatedDriverSession init - loaded \(logs.count) dive logs from YAML")
         for (i, log) in logs.enumerated() {
             print(
-                "DEBUG:   Log \(i): fingerprint=\(log.fingerprint ?? "nil"), startTime=\(log.startTime)"
+                "DEBUG:   Log \(i): fingerprint=\(log.fingerprint ?? "nil"), startTime=\(log.startTimeLocal)"
             )
         }
-        self.bundledLogs = logs.sorted { $0.startTime > $1.startTime }  // Newest first
+        self.bundledLogs = logs.sorted { $0.startTimeUTC > $1.startTimeUTC }  // Newest first
     }
 
     public func readDeviceInfo() async throws -> DiveComputerInfo {
@@ -75,7 +75,7 @@ public final class YAMLSimulatedDriverSession: DiveComputerDriverSession {
             candidates.append(
                 DiveLogCandidate(
                     id: index + 1,
-                    timestamp: log.startTime,
+                    timestamp: log.startTimeUTC,
                     fingerprint: log.fingerprint ?? "YAML-UNKNOWN-\(index)",
                     metadata: ["index": String(index)]
                 ))
@@ -210,6 +210,10 @@ public struct YAMLDiveLogLoader {
         var id: String?
         var fingerprint: String?
         var startTime: String?
+        var startPositionLat: Double?
+        var startPositionLong: Double?
+        var endPositionLat: Double?
+        var endPositionLong: Double?
         var durationSeconds: Double?
         var maxDepthMeters: Double?
         var averageDepthMeters: Double?
@@ -265,12 +269,69 @@ public struct YAMLDiveLogLoader {
 
     private struct YAMLTank: Codable {
         var name: String?
-        var serialNumber: String?
         var volumeLiters: Double?
-        var workingPressureBar: Double?
         var startPressureBar: Double?
         var endPressureBar: Double?
-        var usage: String?
+        var sensorId: String?
+        var pressureRecords: [YAMLPressureRecord]?
+
+        init(
+            name: String? = nil,
+            sensorId: String? = nil,
+            volumeLiters: Double? = nil,
+            startPressureBar: Double? = nil,
+            endPressureBar: Double? = nil,
+            pressureRecords: [YAMLPressureRecord]? = nil
+        ) {
+            self.name = name
+            self.sensorId = sensorId
+            self.volumeLiters = volumeLiters
+            self.startPressureBar = startPressureBar
+            self.endPressureBar = endPressureBar
+            self.pressureRecords = pressureRecords
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            name = try container.decodeIfPresent(String.self, forKey: .name)
+            sensorId = try container.decodeIfPresent(String.self, forKey: .sensorId)
+            if sensorId == nil {
+                sensorId = try container.decodeIfPresent(String.self, forKey: .serialNumber)
+            }
+            volumeLiters = try container.decodeIfPresent(Double.self, forKey: .volumeLiters)
+            startPressureBar = try container.decodeIfPresent(Double.self, forKey: .startPressureBar)
+            endPressureBar = try container.decodeIfPresent(Double.self, forKey: .endPressureBar)
+            pressureRecords = try container.decodeIfPresent(
+                [YAMLPressureRecord].self,
+                forKey: .pressureRecords
+            )
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encodeIfPresent(name, forKey: .name)
+            try container.encodeIfPresent(sensorId, forKey: .sensorId)
+            try container.encodeIfPresent(volumeLiters, forKey: .volumeLiters)
+            try container.encodeIfPresent(startPressureBar, forKey: .startPressureBar)
+            try container.encodeIfPresent(endPressureBar, forKey: .endPressureBar)
+            try container.encodeIfPresent(pressureRecords, forKey: .pressureRecords)
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case name
+            case sensorId
+            case serialNumber
+            case volumeLiters
+            case startPressureBar
+            case endPressureBar
+            case pressureRecords
+        }
+    }
+
+    private struct YAMLPressureRecord: Codable {
+        var timestamp: String?
+        var pressureBar: Double?
+        var timeOffsetSeconds: Double?
     }
 
     private struct YAMLSample: Codable {
@@ -347,7 +408,7 @@ public struct YAMLDiveLogLoader {
 
     private static func createDiveLog(from log: YAMLDiveLog) -> DiveLog? {
         let startTimeStr = log.startTime
-        let startTime = startTimeStr.flatMap { parseISO8601($0) }
+        let startTimeUTC = startTimeStr.flatMap { parseISO8601($0) }
         let durationSecondsValue = log.durationSeconds
         let maxDepth = log.maxDepthMeters
 
@@ -355,10 +416,13 @@ public struct YAMLDiveLogLoader {
             print("DEBUG: createDiveLog FAILED - startTime is missing")
             return nil
         }
-        if startTime == nil {
+        if startTimeUTC == nil {
             print("DEBUG: createDiveLog FAILED - could not parse startTime: \(startTimeStr!)")
             return nil
         }
+        let startTimeLocal = log.timeZoneOffsetSeconds.map {
+            startTimeUTC!.addingTimeInterval(TimeInterval($0))
+        } ?? startTimeUTC!
         if durationSecondsValue == nil {
             print("DEBUG: createDiveLog FAILED - durationSeconds is missing")
             return nil
@@ -369,6 +433,10 @@ public struct YAMLDiveLogLoader {
         }
 
         let durationSeconds = Int(durationSecondsValue!)
+        let startPositionLat = log.startPositionLat
+        let startPositionLong = log.startPositionLong
+        let endPositionLat = log.endPositionLat
+        let endPositionLong = log.endPositionLong
 
         let gasMixes: [GasMix] = (log.gasMixes ?? []).map { mix in
             GasMix(
@@ -378,25 +446,39 @@ public struct YAMLDiveLogLoader {
             )
         }
 
-        let tanks: [DiveTank] = (log.tanks ?? []).map { tank in
-            let usage = tank.usage.flatMap { TankUsage(rawValue: $0) } ?? .unknown
+        var tanks: [DiveTank] = (log.tanks ?? []).map { tank in
+            let records: [DiveTank.PressureRecord] =
+                (tank.pressureRecords ?? []).compactMap { record in
+                    guard let pressure = record.pressureBar else { return nil }
+                    let timestamp: Date?
+                    if let rawTimestamp = record.timestamp {
+                        timestamp = parseISO8601(rawTimestamp)
+                    } else if let offset = record.timeOffsetSeconds {
+                        timestamp = startTimeUTC!.addingTimeInterval(offset)
+                    } else {
+                        timestamp = nil
+                    }
+                    guard let timestamp else { return nil }
+                    return DiveTank.PressureRecord(timestamp: timestamp, pressureBar: pressure)
+                }
+
             return DiveTank(
                 name: tank.name,
-                serialNumber: tank.serialNumber,
+                sensorId: tank.sensorId,
                 volumeLiters: tank.volumeLiters,
-                workingPressureBar: tank.workingPressureBar,
                 startPressureBar: tank.startPressureBar,
                 endPressureBar: tank.endPressureBar,
-                usage: usage
+                pressureRecords: records
             )
         }
 
         let parsedDiveMode = log.diveMode.flatMap { DiveMode(rawValue: $0) }
         let isCCRMode = parsedDiveMode == .ccr || parsedDiveMode == .semiClosed
 
+        var samplePressureRecords: [DiveTank.PressureRecord] = []
         let samples: [DiveSample] = (log.samples ?? []).map { sample in
             let timeOffset = sample.timeOffsetSeconds.map { Int($0) } ?? 0
-            let timestamp = startTime!.addingTimeInterval(TimeInterval(timeOffset))
+            let timestamp = startTimeUTC!.addingTimeInterval(TimeInterval(timeOffset))
             let sampleGasMix: GasMix? = (sample.o2 != nil || sample.he != nil)
                 ? GasMix(
                     o2: sample.o2 ?? 0.21,
@@ -437,7 +519,6 @@ public struct YAMLDiveLogLoader {
                 timestamp: timestamp,
                 depthMeters: sample.depthMeters ?? 0,
                 temperatureCelsius: sample.temperatureCelsius,
-                tankPressureBar: sample.tankPressureBar,
                 ppo2: sample.ppo2,
                 setpoint: sample.setpoint,
                 cns: sample.cns,
@@ -452,11 +533,46 @@ public struct YAMLDiveLogLoader {
             )
         }
 
+        for sample in log.samples ?? [] {
+            guard let pressure = sample.tankPressureBar else { continue }
+            let timeOffset = sample.timeOffsetSeconds.map { Int($0) } ?? 0
+            let timestamp = startTimeUTC!.addingTimeInterval(TimeInterval(timeOffset))
+            samplePressureRecords.append(
+                DiveTank.PressureRecord(timestamp: timestamp, pressureBar: pressure)
+            )
+        }
+
+        if !samplePressureRecords.isEmpty {
+            if tanks.isEmpty {
+                tanks = [
+                    DiveTank(
+                        name: "Tank 1",
+                        startPressureBar: samplePressureRecords.first?.pressureBar,
+                        endPressureBar: samplePressureRecords.last?.pressureBar,
+                        pressureRecords: samplePressureRecords
+                    )
+                ]
+            } else {
+                tanks[0].pressureRecords.append(contentsOf: samplePressureRecords)
+                if tanks[0].startPressureBar == nil {
+                    tanks[0].startPressureBar = samplePressureRecords.first?.pressureBar
+                }
+                if tanks[0].endPressureBar == nil {
+                    tanks[0].endPressureBar = samplePressureRecords.last?.pressureBar
+                }
+            }
+        }
+
         let yamlData = createYAMLRepresentation(log)
         let diveMode = parsedDiveMode
 
         return DiveLog(
-            startTime: startTime!,
+            startTimeUTC: startTimeUTC!,
+            startTimeLocal: startTimeLocal,
+            startPositionLat: startPositionLat,
+            startPositionLong: startPositionLong,
+            endPositionLat: endPositionLat,
+            endPositionLong: endPositionLong,
             duration: .seconds(durationSeconds),
             maxDepthMeters: maxDepth!,
             averageDepthMeters: log.averageDepthMeters,
@@ -470,7 +586,6 @@ public struct YAMLDiveLogLoader {
             gradientFactorHigh: log.gradientFactorHigh.map { Int($0) },
             diveMode: diveMode,
             waterDensity: log.waterDensity,
-            timeZoneOffset: log.timeZoneOffsetSeconds.map { TimeInterval($0) },
             fingerprint: log.fingerprint,
             rawData: yamlData,
             format: .yaml

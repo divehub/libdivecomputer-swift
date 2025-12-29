@@ -260,16 +260,9 @@ public final class ShearwaterSession: @unchecked Sendable, DiveComputerDriverSes
             }
 
             if let parsed = ShearwaterLogParser.parse(data: diveData) {
-                // Adjust startTime if timezone offset is present to store as True UTC
-                // parsed.startTime is "Clock Time as UTC".
-                // True UTC = Clock Time - Offset
-                var finalStartTime = parsed.startTime
-                if let offset = parsed.timeZoneOffset {
-                    finalStartTime = parsed.startTime.addingTimeInterval(-offset)
-                }
-
                 let log = DiveLog(
-                    startTime: finalStartTime,
+                    startTimeUTC: parsed.startTimeUTC,
+                    startTimeLocal: parsed.startTimeLocal,
                     duration: parsed.duration,
                     maxDepthMeters: parsed.maxDepth,
                     averageDepthMeters: parsed.avgDepth,
@@ -281,7 +274,6 @@ public final class ShearwaterSession: @unchecked Sendable, DiveComputerDriverSes
                     gradientFactorHigh: parsed.gradientFactorHigh,
                     diveMode: parsed.diveMode,
                     waterDensity: parsed.waterDensity,
-                    timeZoneOffset: parsed.timeZoneOffset,
                     fingerprint: candidate.fingerprint,
                     rawData: diveData,
                     format: .shearwater
@@ -289,7 +281,7 @@ public final class ShearwaterSession: @unchecked Sendable, DiveComputerDriverSes
                 dives.append(log)
             } else {
                 let log = DiveLog(
-                    startTime: Date(),
+                    startTimeUTC: Date(),
                     duration: .seconds(0),
                     maxDepthMeters: 0,
                     samples: [],
