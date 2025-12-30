@@ -134,24 +134,22 @@ private func mapFitToDiveLog(
         return Double(diveSettingsMesg.getCcrHighSetpoint())
     }()
 
-    let diveMode: DiveMode? = {
-        if let diveSettingsMesg,
-            diveSettingsMesg.isCcrLowSetpointValid()
-                || diveSettingsMesg.isCcrHighSetpointValid()
-        {
-            return .ccr
-        }
-        if recordMesgs.contains(where: { $0.isPo2Valid() }) {
-            return .ccr
-        }
-        return nil
-    }()
-
     let gasMixesByIndex = buildGasMixesByIndex(messages.getDiveGasMesgs())
     let gasMixes =
         gasMixesByIndex
         .sorted { $0.key < $1.key }
         .map { $0.value }
+
+    let sessionDiveMode = resolvedSessionDiveMode(session: sessionMesg)
+    let diveMode: DiveMode? = {
+        if let sessionDiveMode {
+            return sessionDiveMode
+        }
+        if gasMixesByIndex.contains(where: { $0.value.isDiluent }) {
+            return .ccr
+        }
+        return nil
+    }()
 
     let eventMesgs = messages.getEventMesgs()
     let gasSwitchEvents = buildGasSwitchEvents(eventMesgs: eventMesgs)
@@ -505,6 +503,30 @@ private func resolvedStartTimeLocal(activity: FITActivityMesg?, records: [FITRec
     }
     return Date(timeIntervalSince1970: 0)
 }
+
+private func resolvedSessionDiveMode(session: FITSessionMesg?) -> DiveMode? {
+    guard let session,
+        session.isSportValid(),
+        session.getSport() == FITSportDiving,
+        session.isSubSportValid()
+    else {
+        return nil
+    }
+
+    let subSport = session.getSubSport()
+    switch subSport {
+    case FITSubSportSingleGasDiving:
+        return .ocRec
+    case FITSubSportMultiGasDiving:
+        return .ocTec
+    case FITSubSportCCRDiving:
+        return .ccr
+    default:
+        return nil
+    }
+}
+
+private let FITSubSportCCRDiving = FITSubSport(63)
 
 private struct GarminPosition {
     let lat: Double?
