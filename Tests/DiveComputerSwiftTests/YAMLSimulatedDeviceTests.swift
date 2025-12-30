@@ -122,12 +122,10 @@ final class YAMLSimulatedDeviceTests: XCTestCase {
                     volumeLiters: 24.0
                     startPressureBar: 220.0
                     endPressureBar: 50.0
-                    usage: "unknown"
                   - name: "O2"
                     volumeLiters: 7.0
                     startPressureBar: 200.0
                     endPressureBar: 100.0
-                    usage: "oxygen"
             """
 
         let log = YAMLDiveLogLoader.parse(yamlWithTanks)
@@ -141,7 +139,7 @@ final class YAMLSimulatedDeviceTests: XCTestCase {
             XCTAssertEqual(backGas?.volumeLiters, 24.0)
             XCTAssertEqual(backGas?.startPressureBar, 220.0)
 
-            let o2Tank = log.tanks.first { $0.usage == .oxygen }
+            let o2Tank = log.tanks.first(where: { $0.name == "O2" })
             XCTAssertNotNil(o2Tank)
             XCTAssertEqual(o2Tank?.name, "O2")
         }
