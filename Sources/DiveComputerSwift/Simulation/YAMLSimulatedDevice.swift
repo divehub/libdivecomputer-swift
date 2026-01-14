@@ -1,6 +1,6 @@
 import Foundation
-import os
 import Yams
+import os
 
 // MARK: - YAML Simulated Device
 
@@ -14,6 +14,7 @@ public struct YAMLSimulatedDescriptor {
 
     public static func makeDefault() -> DiveComputerDescriptor {
         return DiveComputerDescriptor(
+            id: UUID().uuidString,
             vendor: "Simulated",
             product: "YAML Test Device",
             capabilities: [.logDownload],
@@ -420,9 +421,10 @@ public struct YAMLDiveLogLoader {
             print("DEBUG: createDiveLog FAILED - could not parse startTime: \(startTimeStr!)")
             return nil
         }
-        let startTimeLocal = log.timeZoneOffsetSeconds.map {
-            startTimeUTC!.addingTimeInterval(TimeInterval($0))
-        } ?? startTimeUTC!
+        let startTimeLocal =
+            log.timeZoneOffsetSeconds.map {
+                startTimeUTC!.addingTimeInterval(TimeInterval($0))
+            } ?? startTimeUTC!
         if durationSecondsValue == nil {
             print("DEBUG: createDiveLog FAILED - durationSeconds is missing")
             return nil
@@ -479,7 +481,8 @@ public struct YAMLDiveLogLoader {
         let samples: [DiveSample] = (log.samples ?? []).map { sample in
             let timeOffset = sample.timeOffsetSeconds.map { Int($0) } ?? 0
             let timestamp = startTimeUTC!.addingTimeInterval(TimeInterval(timeOffset))
-            let sampleGasMix: GasMix? = (sample.o2 != nil || sample.he != nil)
+            let sampleGasMix: GasMix? =
+                (sample.o2 != nil || sample.he != nil)
                 ? GasMix(
                     o2: sample.o2 ?? 0.21,
                     he: sample.he ?? 0.0,

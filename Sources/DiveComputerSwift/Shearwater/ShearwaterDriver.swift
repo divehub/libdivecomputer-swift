@@ -328,7 +328,7 @@ final class ShearwaterTransport: @unchecked Sendable {
     private let notifyCharacteristic: BluetoothCharacteristic
     private let writeType: BluetoothWriteType
     private var receivedData: Data = Data()
-    private let dataQueue = DispatchQueue(label: "com.shearwater.dataqueue")
+    private let dataQueue = DispatchQueue(label: "ai.divehub.shearwater.ble")
     private var notificationTask: Task<Void, Never>?
 
     // Continuation for waiting for data, replacing polling

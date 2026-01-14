@@ -8,6 +8,8 @@ import os
 public final class SimulatedTransport: BluetoothTransport {
     private let simulatedDevices: [DiveComputerDescriptor]
     private var scanContinuation: AsyncThrowingStream<BluetoothDiscovery, Error>.Continuation?
+    private var scanTask: Task<Void, Never>?
+    private var activeScanID: UUID?
 
     public var bluetoothState: AsyncStream<BluetoothState> {
         AsyncStream { continuation in
@@ -24,14 +26,31 @@ public final class SimulatedTransport: BluetoothTransport {
         -> AsyncThrowingStream<BluetoothDiscovery, Error>
     {
         return AsyncThrowingStream { continuation in
+            stopScan()
+            let scanID = UUID()
+            activeScanID = scanID
             self.scanContinuation = continuation
 
-            Task {
-                try? await Task.sleep(for: .seconds(0.5))  // Simulate scan delay
+            continuation.onTermination = { [weak self] _ in
+                Task { @MainActor in
+                    guard let self, self.activeScanID == scanID else { return }
+                    self.stopScan()
+                }
+            }
+
+            scanTask = Task { @MainActor [weak self, simulatedDevices] in
+                guard let self, self.activeScanID == scanID else { return }
+                do {
+                    try await Task.sleep(for: .seconds(0.5))  // Simulate scan delay
+                } catch {
+                    return
+                }
+
+                guard self.activeScanID == scanID, !Task.isCancelled else { return }
 
                 for device in simulatedDevices {
                     let discovery = BluetoothDiscovery(
-                        id: UUID(),  // Random UUID for every scan to simulate fresh discovery, or fixed?
+                        id: UUID(uuidString: device.id)!,  // Random UUID for every scan to simulate fresh discovery, or fixed?
                         descriptor: device,
                         name: "Simulated \(device.product)",
                         rssi: -50,
@@ -40,15 +59,24 @@ public final class SimulatedTransport: BluetoothTransport {
                     continuation.yield(discovery)
                 }
 
-                try? await Task.sleep(for: timeout)
+                do {
+                    try await Task.sleep(for: timeout)
+                } catch {
+                    return
+                }
+
+                guard self.activeScanID == scanID, !Task.isCancelled else { return }
                 continuation.finish()
             }
         }
     }
 
     public func stopScan() {
+        scanTask?.cancel()
+        scanTask = nil
         scanContinuation?.finish()
         scanContinuation = nil
+        activeScanID = nil
     }
 
     public func connect(_ discovery: BluetoothDiscovery) async throws -> BluetoothLink {
@@ -127,6 +155,7 @@ public struct SimulatedDescriptor {
     public static func makeDefault() -> DiveComputerDescriptor {
         // We reuse Shearwater vendor/product to test Shearwater-like behavior but with Simulated Driver
         return DiveComputerDescriptor(
+            id: UUID().uuidString,
             vendor: "Simulated",
             product: "Shearwater Simulator",
             capabilities: [.logDownload],

@@ -13,6 +13,7 @@ import os
     public final class CoreBluetoothTransport: NSObject, BluetoothTransport {
         private var central: CBCentralManager!
         private var scanContinuation: AsyncThrowingStream<BluetoothDiscovery, Error>.Continuation?
+        private var activeScanID: UUID?
         private var stateCallbacks: [(BluetoothState) -> Void] = []
 
         public var bluetoothState: AsyncStream<BluetoothState> {
@@ -54,16 +55,33 @@ import os
             scanDescriptors = descriptors
 
             return AsyncThrowingStream { continuation in
+                stopScan()
+
+                let scanID = UUID()
+                activeScanID = scanID
+                scanContinuation = continuation
+                continuation.onTermination = { [weak self] _ in
+                    Task { @MainActor in
+                        guard let self, self.activeScanID == scanID else { return }
+                        self.stopScan()
+                    }
+                }
+
                 Task { @MainActor [weak self] in
-                    guard let self else { return }
+                    guard let self, self.activeScanID == scanID else { return }
+                    self.scanTimeoutTask?.cancel()
+                    self.scanTimeoutTask = nil
                     do {
                         try await waitUntilReady()
                     } catch {
+                        guard self.activeScanID == scanID else { return }
                         continuation.finish(throwing: error)
+                        self.scanContinuation = nil
+                        self.activeScanID = nil
                         return
                     }
 
-                    scanContinuation = continuation
+                    guard self.activeScanID == scanID else { return }
                     let services = Array(Set(descriptors.flatMap { $0.serviceUUIDs })).map {
                         $0.cbUUID
                     }
@@ -78,7 +96,8 @@ import os
                     scanTimeoutTask?.cancel()
                     scanTimeoutTask = Task { @MainActor [weak self] in
                         try? await Task.sleep(for: timeout)
-                        self?.stopScan()
+                        guard let self, self.activeScanID == scanID else { return }
+                        self.stopScan()
                     }
                 }
             }
@@ -90,6 +109,7 @@ import os
             scanTimeoutTask = nil
             scanContinuation?.finish()
             scanContinuation = nil
+            activeScanID = nil
         }
 
         public func connect(_ discovery: BluetoothDiscovery) async throws -> BluetoothLink {
