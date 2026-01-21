@@ -519,7 +519,7 @@ public struct ShearwaterLogParser {
             guard let statusByte = reader.u8(at: 12) else { continue }
 
             let isOC = (statusByte & 0x10) != 0
-            let isExternalPPO2 = (statusByte & 0x02) == 0
+            let ppo2Sensor: Bool = isOC ? false : ((statusByte & 0x02) == 0)
 
             // Depth
             let depthRaw = reader.u16be(at: 1) ?? 0
@@ -560,7 +560,7 @@ public struct ShearwaterLogParser {
             let ppo2 = reader.u8(at: 7).map { Double($0) / 100.0 }
 
             var ppo2Sensors: [Double]?
-            if !isOC && isExternalPPO2 {
+            if ppo2Sensor {
                 let s0 = reader.u8(at: 13).map { Double($0) * headers.calibration[0] }
                 let s1 = reader.u8(at: 15).map { Double($0) * headers.calibration[1] }
                 let s2 = reader.u8(at: 16).map { Double($0) * headers.calibration[2] }
@@ -599,7 +599,8 @@ public struct ShearwaterLogParser {
             var events: [DiveEvent] = []
             let gasO2 = reader.u8(at: 8) ?? 0
             let gasHe = reader.u8(at: 9) ?? 0
-            let sampleGasMix: GasMix? = (gasO2 > 0 || gasHe > 0)
+            let sampleGasMix: GasMix? =
+                (gasO2 > 0 || gasHe > 0)
                 ? GasMix(
                     o2: Double(gasO2) / 100.0,
                     he: Double(gasHe) / 100.0,
@@ -648,7 +649,7 @@ public struct ShearwaterLogParser {
                     events: events,
                     diveMode: isOC ? .ocTec : .ccr,
                     ppo2Sensors: ppo2Sensors,
-                    isExternalPPO2: isExternalPPO2,
+                    isExternalPPO2: ppo2Sensor,
                     tts: tts
                 ))
         }
@@ -671,6 +672,7 @@ public struct ShearwaterLogParser {
             }
         }
 
-        return SampleParseResult(samples: samples, pressureRecordsByTankIndex: pressureRecordsByTankIndex)
+        return SampleParseResult(
+            samples: samples, pressureRecordsByTankIndex: pressureRecordsByTankIndex)
     }
 }
