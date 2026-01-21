@@ -92,8 +92,8 @@ public struct ShearwaterLogParser {
         guard data.count >= blockSize else { return nil }
 
         // 1. Extract Records
-        let (rawSamples, openingRecords, closingRecords, finalRecord, _) = extractRecords(
-            from: data)
+        let (rawSamples, rawSampleExts, openingRecords, closingRecords, finalRecord, _) =
+            extractRecords(from: data)
 
         // 2. Parse Headers / Metadata
         let headers = parseHeaders(
@@ -105,30 +105,39 @@ public struct ShearwaterLogParser {
         // 3. Parse Samples
         let sampleResult = parseSamples(
             rawSamples: rawSamples,
+            rawSampleExts: rawSampleExts,
             startTime: startTimeUTC,
             headers: headers
         )
         let samples = sampleResult.samples
         var tanks = headers.tanks
-        if !sampleResult.pressureRecords.isEmpty {
-            let startPressure = sampleResult.pressureRecords.first?.pressureBar
-            let endPressure = sampleResult.pressureRecords.last?.pressureBar
-            if tanks.isEmpty {
-                tanks = [
-                    DiveTank(
-                        name: "Tank 1",
-                        startPressureBar: startPressure,
-                        endPressureBar: endPressure,
-                        pressureRecords: sampleResult.pressureRecords
-                    )
-                ]
-            } else {
-                tanks[0].pressureRecords = sampleResult.pressureRecords
-                if tanks[0].startPressureBar == nil {
-                    tanks[0].startPressureBar = startPressure
+        if !sampleResult.pressureRecordsByTankIndex.isEmpty {
+            let maxIndex = sampleResult.pressureRecordsByTankIndex.keys.max() ?? -1
+            if maxIndex >= 0, tanks.count <= maxIndex {
+                for i in tanks.count...maxIndex {
+                    tanks.append(DiveTank(name: "Tank \(i + 1)"))
                 }
-                if tanks[0].endPressureBar == nil {
-                    tanks[0].endPressureBar = endPressure
+            }
+
+            if tanks.isEmpty, maxIndex >= 0 {
+                tanks = (0...maxIndex).map { DiveTank(name: "Tank \($0 + 1)") }
+            }
+
+            for (index, records) in sampleResult.pressureRecordsByTankIndex {
+                guard !records.isEmpty else { continue }
+                if index >= tanks.count {
+                    tanks.append(DiveTank(name: "Tank \(index + 1)", pressureRecords: records))
+                } else {
+                    tanks[index].pressureRecords = records
+                }
+
+                let startPressure = records.first?.pressureBar
+                let endPressure = records.last?.pressureBar
+                if tanks[index].startPressureBar == nil {
+                    tanks[index].startPressureBar = startPressure
+                }
+                if tanks[index].endPressureBar == nil {
+                    tanks[index].endPressureBar = endPressure
                 }
             }
         }
@@ -194,6 +203,7 @@ public struct ShearwaterLogParser {
 
     private static func extractRecords(from data: Data) -> (
         samples: [(timeOffset: TimeInterval, data: DataReader)],
+        sampleExts: [(timeOffset: TimeInterval, data: DataReader)],
         opening: [RecordType: DataReader],
         closing: [RecordType: DataReader],
         final: DataReader?,
@@ -201,6 +211,7 @@ public struct ShearwaterLogParser {
     ) {
         var offset = 0
         var samples: [(TimeInterval, DataReader)] = []
+        var sampleExts: [(TimeInterval, DataReader)] = []
         var opening: [RecordType: DataReader] = [:]
         var closing: [RecordType: DataReader] = [:]
         var final: DataReader? = nil
@@ -217,6 +228,9 @@ public struct ShearwaterLogParser {
                 case .diveSample:
                     currentTime += sampleInterval
                     samples.append((currentTime, reader))
+
+                case .diveSampleExt:
+                    sampleExts.append((currentTime, reader))
 
                 case .opening0, .opening1, .opening2, .opening3, .opening4, .opening5, .opening6,
                     .opening7:
@@ -241,7 +255,7 @@ public struct ShearwaterLogParser {
             offset += blockSize
         }
 
-        return (samples, opening, closing, final, sampleInterval)
+        return (samples, sampleExts, opening, closing, final, sampleInterval)
     }
 
     // --- Phase 2: Header Parsing ---
@@ -255,7 +269,7 @@ public struct ShearwaterLogParser {
         var isImperial: Bool
         var isTeric: Bool
         var logVersion: Int
-        var isAIEnabled: Bool
+        var aiMode: UInt8?
         var timeZoneOffset: TimeInterval?
         var decoModel: String?
         var waterDensity: Double?
@@ -274,7 +288,7 @@ public struct ShearwaterLogParser {
         var h = Headers(
             startTime: nil, duration: nil, maxDepth: nil, fingerprint: nil, diveMode: nil,
             isImperial: false, isTeric: false,
-            logVersion: 0, isAIEnabled: false, timeZoneOffset: nil, decoModel: nil,
+            logVersion: 0, aiMode: nil, timeZoneOffset: nil, decoModel: nil,
             waterDensity: nil, surfacePressure: nil,
             gfLow: nil, gfHigh: nil, gasMixes: [], tanks: [], calibration: [0, 0, 0]
         )
@@ -354,7 +368,7 @@ public struct ShearwaterLogParser {
 
             // AI check (Byte 28)
             if let aiMode = op4.u8(at: 28) {
-                h.isAIEnabled = (aiMode != 0)
+                h.aiMode = aiMode
             }
         }
 
@@ -468,19 +482,38 @@ public struct ShearwaterLogParser {
 
     private struct SampleParseResult {
         var samples: [DiveSample]
-        var pressureRecords: [DiveTank.PressureRecord]
+        var pressureRecordsByTankIndex: [Int: [DiveTank.PressureRecord]]
     }
 
     private static func parseSamples(
         rawSamples: [(TimeInterval, DataReader)],
+        rawSampleExts: [(TimeInterval, DataReader)],
         startTime: Date,
         headers: Headers
     ) -> SampleParseResult {
         var samples: [DiveSample] = []
-        var pressureRecords: [DiveTank.PressureRecord] = []
+        var pressureRecordsByTankIndex: [Int: [DiveTank.PressureRecord]] = [:]
         var lastO2: UInt8 = 0
         var lastHe: UInt8 = 0
         var lastIsOC: Bool? = nil
+
+        func appendPressureRecord(
+            _ pressureBar: Double?,
+            tankIndex: Int,
+            timestamp: Date
+        ) {
+            guard let pressureBar else { return }
+            let record = DiveTank.PressureRecord(timestamp: timestamp, pressureBar: pressureBar)
+            pressureRecordsByTankIndex[tankIndex, default: []].append(record)
+        }
+
+        func decodePressureBar(_ raw: UInt16?) -> Double? {
+            guard let raw, raw < 0xFFF0 else { return nil }
+            let masked = raw & 0x0FFF
+            guard masked > 0 else { return nil }
+            let pPsi = Double(masked) * 2.0
+            return pPsi * 0.0689476
+        }
 
         for (timeOffset, reader) in rawSamples {
             guard let statusByte = reader.u8(at: 12) else { continue }
@@ -509,17 +542,17 @@ public struct ShearwaterLogParser {
                     : Double(tempInt)
             }
 
-            // Pressure
-            var pressureBar: Double?
-            if headers.isAIEnabled {
-                // User snippet suggests Offset 27.
-                // C code suggests offset + pnf + 27 (28 if PNF).
-                // We'll trust User Snippet for LogVer 14.
-                let pressureOffset = (headers.logVersion > 14) ? 28 : 27
-
-                if let pRaw = reader.u16be(at: pressureOffset), pRaw < 0xFFF0 {
-                    let pPsi = Double(pRaw & 0x0FFF) * 2.0
-                    pressureBar = pPsi * 0.0689476
+            // Pressure (Tank 1/2 from main sample record)
+            if headers.logVersion >= 7 {
+                let mainOffsets: [Int] = [28, 20]
+                let baseIndex = (headers.aiMode == 4) ? 4 : 0
+                for (idx, offset) in mainOffsets.enumerated() {
+                    let pressureBar = decodePressureBar(reader.u16be(at: offset))
+                    appendPressureRecord(
+                        pressureBar,
+                        tankIndex: baseIndex + idx,
+                        timestamp: startTime.addingTimeInterval(timeOffset)
+                    )
                 }
             }
 
@@ -598,11 +631,6 @@ public struct ShearwaterLogParser {
             lastIsOC = isOC
 
             let timestamp = startTime.addingTimeInterval(timeOffset)
-            if let pressureBar {
-                pressureRecords.append(
-                    DiveTank.PressureRecord(timestamp: timestamp, pressureBar: pressureBar)
-                )
-            }
 
             samples.append(
                 DiveSample(
@@ -625,6 +653,24 @@ public struct ShearwaterLogParser {
                 ))
         }
 
-        return SampleParseResult(samples: samples, pressureRecords: pressureRecords)
+        if headers.logVersion >= 13 {
+            for (timeOffset, reader) in rawSampleExts {
+                let timestamp = startTime.addingTimeInterval(timeOffset)
+                for i in 0..<2 {
+                    let offset = 1 + i * 2
+                    let pressureBar = decodePressureBar(reader.u16be(at: offset))
+                    appendPressureRecord(pressureBar, tankIndex: 2 + i, timestamp: timestamp)
+                }
+                if headers.logVersion >= 14 {
+                    for i in 0..<2 {
+                        let offset = 5 + i * 2
+                        let pressureBar = decodePressureBar(reader.u16be(at: offset))
+                        appendPressureRecord(pressureBar, tankIndex: 4 + i, timestamp: timestamp)
+                    }
+                }
+            }
+        }
+
+        return SampleParseResult(samples: samples, pressureRecordsByTankIndex: pressureRecordsByTankIndex)
     }
 }
