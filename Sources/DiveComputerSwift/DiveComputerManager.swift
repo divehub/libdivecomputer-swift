@@ -7,7 +7,7 @@ public enum DiveComputerManagerError: Error {
 
 @MainActor
 public final class DiveComputerManager {
-    private var drivers: [String: any DiveComputerDriver] = [:]
+    private var driversByServiceUUID: [BluetoothUUID: any DiveComputerDriver] = [:]
     private let transport: BluetoothTransport
 
     public init(transport: BluetoothTransport) {
@@ -19,11 +19,13 @@ public final class DiveComputerManager {
     }
 
     public func register(driver: any DiveComputerDriver) {
-        drivers[driver.descriptor.id] = driver
+        for serviceUUID in driver.descriptor.serviceUUIDs {
+            driversByServiceUUID[serviceUUID] = driver
+        }
     }
 
     public var supportedDescriptors: [DiveComputerDescriptor] {
-        Array(drivers.values).map(\.descriptor)
+        Array(Set(driversByServiceUUID.values.map(\.descriptor)))
     }
 
     public func scan(timeout: Duration = .seconds(10)) -> AsyncThrowingStream<
@@ -40,10 +42,14 @@ public final class DiveComputerManager {
         Logger.bluetooth.info(
             "🔌 DiveComputerManager: Starting connection to \(discovery.name ?? discovery.descriptor.product)"
         )
-        guard let driver = drivers[discovery.descriptor.id] else {
+        let serviceUUIDs = discovery.descriptor.serviceUUIDs
+        guard let driver = serviceUUIDs.compactMap({ driversByServiceUUID[$0] }).first else {
+            let serviceUUIDsDescription = serviceUUIDs.map(\.rawValue).joined(separator: ", ")
             Logger.bluetooth.error(
-                "❌ DiveComputerManager: No driver found for \(discovery.descriptor.id)")
-            throw DiveComputerManagerError.unknownDriver(id: discovery.descriptor.id)
+                "❌ DiveComputerManager: No driver found for service UUID(s): \(serviceUUIDsDescription)")
+            throw DiveComputerManagerError.unknownDriver(
+                id: serviceUUIDs.first?.rawValue ?? discovery.descriptor.id
+            )
         }
         Logger.bluetooth.info("🔌 DiveComputerManager: Found driver, connecting to transport...")
         let link = try await transport.connect(discovery)

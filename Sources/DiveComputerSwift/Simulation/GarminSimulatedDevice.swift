@@ -8,7 +8,7 @@ public struct GarminSimulatedDescriptor {
 
     public static func makeDefault() -> DiveComputerDescriptor {
         DiveComputerDescriptor(
-            id: UUID().uuidString,
+            id: "00000002-0000-0000-0000-000000000000",
             vendor: "Garmin",
             product: "Garmin FIT Simulator",
             capabilities: [.logDownload],

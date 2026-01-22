@@ -50,7 +50,7 @@ public final class SimulatedTransport: BluetoothTransport {
 
                 for device in simulatedDevices {
                     let discovery = BluetoothDiscovery(
-                        id: UUID(uuidString: device.id)!,  // Random UUID for every scan to simulate fresh discovery, or fixed?
+                        id: UUID(uuidString: device.id)!,  // Fixed ID for simulation
                         descriptor: device,
                         name: "Simulated \(device.product)",
                         rssi: -50,
@@ -155,7 +155,7 @@ public struct SimulatedDescriptor {
     public static func makeDefault() -> DiveComputerDescriptor {
         // We reuse Shearwater vendor/product to test Shearwater-like behavior but with Simulated Driver
         return DiveComputerDescriptor(
-            id: UUID().uuidString,
+            id: "00000000-0000-0000-0000-000000000000",
             vendor: "Simulated",
             product: "Shearwater Simulator",
             capabilities: [.logDownload],

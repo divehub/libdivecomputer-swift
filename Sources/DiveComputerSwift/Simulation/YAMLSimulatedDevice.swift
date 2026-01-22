@@ -14,7 +14,7 @@ public struct YAMLSimulatedDescriptor {
 
     public static func makeDefault() -> DiveComputerDescriptor {
         return DiveComputerDescriptor(
-            id: UUID().uuidString,
+            id: "00000001-0000-0000-0000-000000000000",
             vendor: "Simulated",
             product: "YAML Test Device",
             capabilities: [.logDownload],
