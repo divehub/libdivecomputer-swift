@@ -21,6 +21,7 @@ public struct ShearwaterLogParser {
         public let diveMode: DiveMode?
         public let waterDensity: Double?
         public let fingerprint: Data?
+        public let ppo2Calibrations: [Double]?  // Calibration values for PPo2 sensors, if available
     }
 
     // --- Internal Helpers ---
@@ -168,7 +169,8 @@ public struct ShearwaterLogParser {
             gradientFactorHigh: headers.gfHigh,
             diveMode: headers.diveMode,
             waterDensity: headers.waterDensity,
-            fingerprint: headers.fingerprint
+            fingerprint: headers.fingerprint,
+            ppo2Calibrations: headers.calibration,
         )
     }
 
@@ -194,6 +196,9 @@ public struct ShearwaterLogParser {
             diveMode: parsed.diveMode,
             waterDensity: parsed.waterDensity,
             fingerprint: parsed.fingerprint.map { $0.map { String(format: "%02X", $0) }.joined() },
+            ppo2SensorCalibrations: (parsed.diveMode == .ccr
+                && parsed.samples.contains(where: { $0.isExternalPPO2 ?? false }))
+                ? parsed.ppo2Calibrations : nil,
             rawData: data,
             format: .shearwater
         )

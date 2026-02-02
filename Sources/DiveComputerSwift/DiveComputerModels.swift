@@ -184,6 +184,7 @@ public struct DiveLog: Sendable, Hashable, Identifiable {
     public var diveMode: DiveMode?
     public var waterDensity: Double?
     public var format: DiveLogFormat
+    public var ppo2SensorCalibrations: [Double]?  // Calibration values for PPo2 sensors, if available. cal * mV = ppo2 in bar
 
     public var rawData: Data?
 
@@ -209,8 +210,9 @@ public struct DiveLog: Sendable, Hashable, Identifiable {
         diveMode: DiveMode? = nil,
         waterDensity: Double? = nil,
         fingerprint: String? = nil,
+        ppo2SensorCalibrations: [Double]? = nil,
         rawData: Data? = nil,
-        format: DiveLogFormat = .shearwater
+        format: DiveLogFormat,
     ) {
         self.id = id
         self.startTimeUTC = startTimeUTC
@@ -233,6 +235,7 @@ public struct DiveLog: Sendable, Hashable, Identifiable {
         self.diveMode = diveMode
         self.waterDensity = waterDensity
         self.fingerprint = fingerprint
+        self.ppo2SensorCalibrations = ppo2SensorCalibrations
         self.rawData = rawData
         self.format = format
     }
